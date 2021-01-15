@@ -53,9 +53,10 @@ conn = trino.dbapi.connect(
     http_scheme='https',
     auth=trino.auth.BasicAuthentication("principal id", "password"),
 )
-cur = conn.cursor()
-cur.execute('SELECT * FROM system.runtime.nodes')
-rows = cur.fetchall()
+cur = await conn.cursor()
+await cur.execute('SELECT * FROM system.runtime.nodes')
+rows = await cur.fetchall()
+await conn.close()
 ```
 
 # Transactions
@@ -65,7 +66,7 @@ The client runs by default in *autocommit* mode. To enable transactions, set
 ```python
 import trino
 from trino import transaction
-with trino.dbapi.connect(
+async with trino.dbapi.connect(
     host='localhost',
     port=8080,
     user='the-user',
@@ -73,11 +74,11 @@ with trino.dbapi.connect(
     schema='the-schema',
     isolation_level=transaction.IsolationLevel.REPEATABLE_READ,
 ) as conn:
-  cur = conn.cursor()
-  cur.execute('INSERT INTO sometable VALUES (1, 2, 3)')
-  cur.fetchone()
-  cur.execute('INSERT INTO sometable VALUES (4, 5, 6)')
-  cur.fetchone()
+  cur = awwait conn.cursor()
+  await cur.execute('INSERT INTO sometable VALUES (1, 2, 3)')
+  await cur.fetchone()
+  await cur.execute('INSERT INTO sometable VALUES (4, 5, 6)')
+  await cur.fetchone()
 ```
 
 The transaction is created when the first SQL statement is executed.
