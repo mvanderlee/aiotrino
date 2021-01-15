@@ -18,7 +18,6 @@ defined in pep-0249.
 import asyncio
 import functools
 import random
-import time
 
 import trino.logging
 

@@ -208,7 +208,7 @@ class TrinoRequest(object):
         http_headers=None,  # type: Optional[Dict[Text, Text]]
         transaction_id=NO_TRANSACTION,  # type: Optional[Text]
         http_scheme=constants.HTTP,  # type: Text
-        auth=constants.DEFAULT_AUTH,  # type: Optional[Any]
+        auth=constants.DEFAULT_AUTH,  # type: Optional[trino.auth.Authentication]
         redirect_handler=None,
         max_attempts=MAX_ATTEMPTS,  # type: int
         request_timeout=constants.DEFAULT_REQUEST_TIMEOUT,  # type: Union[float, Tuple[float, float]]
@@ -324,8 +324,7 @@ class TrinoRequest(object):
             exceptions=self._exceptions,
             conditions=(
                 # need retry when there is no exception but the status code is 503
-                lambda response: getattr(response, "status", None)
-                == 503,
+                lambda response: getattr(response, "status", None) == 503,
             ),
             max_attempts=self._max_attempts,
         )
@@ -405,7 +404,7 @@ class TrinoRequest(object):
 
         return exceptions.TrinoQueryError(error, query_id)
 
-    async def raise_response_error(self, http_response):
+    def raise_response_error(self, http_response):
         # type: (aiohttp.ClientResponse) -> None
         if http_response.status == 503:
             raise exceptions.Http503Error("error 503: service unavailable")
@@ -420,7 +419,7 @@ class TrinoRequest(object):
     async def process(self, http_response):
         # type: (aiohttp.ClientResponse) -> TrinoStatus
         if not http_response.ok:
-            await self.raise_response_error(http_response)
+            self.raise_response_error(http_response)
 
         response = await http_response.json()
         logger.debug("HTTP %s: %s", http_response.status, response)
@@ -579,7 +578,7 @@ class TrinoQuery(object):
         if response.status == 204:
             logger.debug("query cancelled: %s", self.query_id)
             return
-        await self._request.raise_response_error(response)
+        self._request.raise_response_error(response)
 
     def is_finished(self):
         # type: () -> bool

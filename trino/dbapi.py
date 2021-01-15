@@ -471,12 +471,12 @@ class Cursor(object):
 
         return result
 
-    async def genall(self):
-        return await self._query.result
+    def genall(self):
+        return self._query.result
 
     async def fetchall(self):
         # type: () -> List[List[Any]]
-        return list(await self.genall())
+        return [row async for row in self.genall()]
 
     async def cancel(self):
         if self._query is None:
