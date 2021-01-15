@@ -61,15 +61,15 @@ class Transaction(object):
             raise trino.exceptions.DatabaseError(
                 "failed to start transaction: {}".format(response.status_code)
             )
-        transaction_id = response.headers.get(constants.HEADER_STARTED_TRANSACTION)
+        transaction_id = response.headers.get(constants.HEADERS.STARTED_TRANSACTION)
         if transaction_id and transaction_id != NO_TRANSACTION:
-            self._id = response.headers[constants.HEADER_STARTED_TRANSACTION]
+            self._id = response.headers[constants.HEADERS.STARTED_TRANSACTION]
         status = await self._request.process(response)
         while status.next_uri:
             response = await self._request.get(status.next_uri)
-            transaction_id = response.headers.get(constants.HEADER_STARTED_TRANSACTION)
+            transaction_id = response.headers.get(constants.HEADERS.STARTED_TRANSACTION)
             if transaction_id and transaction_id != NO_TRANSACTION:
-                self._id = response.headers[constants.HEADER_STARTED_TRANSACTION]
+                self._id = response.headers[constants.HEADERS.STARTED_TRANSACTION]
             status = await self._request.process(response)
         self._request.transaction_id = self._id
         logger.info("transaction started: " + self._id)

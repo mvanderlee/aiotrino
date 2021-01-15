@@ -282,12 +282,12 @@ class TrinoRequest(object):
         # type: () -> Dict[Text, Text]
         headers = {}
 
-        headers[constants.HEADER_CATALOG] = self._client_session.catalog
-        headers[constants.HEADER_SCHEMA] = self._client_session.schema
-        headers[constants.HEADER_SOURCE] = self._client_session.source
-        headers[constants.HEADER_USER] = self._client_session.user
+        headers[constants.HEADERS.CATALOG] = self._client_session.catalog
+        headers[constants.HEADERS.SCHEMA] = self._client_session.schema
+        headers[constants.HEADERS.SOURCE] = self._client_session.source
+        headers[constants.HEADERS.USER] = self._client_session.user
 
-        headers[constants.HEADER_SESSION] = ",".join(
+        headers[constants.HEADERS.SESSION] = ",".join(
             # ``name`` must not contain ``=``
             "{}={}".format(name, value)
             for name, value in self._client_session.properties.items()
@@ -300,7 +300,7 @@ class TrinoRequest(object):
         headers.update(self._client_session.headers)
 
         transaction_id = self._client_session.transaction_id
-        headers[constants.HEADER_TRANSACTION] = transaction_id
+        headers[constants.HEADERS.TRANSACTION] = transaction_id
 
         return {k: v for k, v in headers.items() if v is not None}
 
@@ -426,15 +426,15 @@ class TrinoRequest(object):
         if "error" in response:
             raise self._process_error(response["error"], response.get("id"))
 
-        if constants.HEADER_CLEAR_SESSION in http_response.headers:
+        if constants.HEADERS.CLEAR_SESSION in http_response.headers:
             for prop in get_header_values(
-                http_response.headers, constants.HEADER_CLEAR_SESSION
+                http_response.headers, constants.HEADERS.CLEAR_SESSION
             ):
                 self._client_session.properties.pop(prop, None)
 
-        if constants.HEADER_SET_SESSION in http_response.headers:
+        if constants.HEADERS.SET_SESSION in http_response.headers:
             for key, value in get_session_property_values(
-                http_response.headers, constants.HEADER_SET_SESSION
+                http_response.headers, constants.HEADERS.SET_SESSION
             ):
                 self._client_session.properties[key] = value
 

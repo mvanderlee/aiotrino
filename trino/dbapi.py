@@ -287,8 +287,8 @@ class Cursor(object):
         for _ in result:
             response_headers = result.response_headers
 
-            if constants.HEADER_ADDED_PREPARE in response_headers:
-                return response_headers[constants.HEADER_ADDED_PREPARE]
+            if constants.HEADERS.ADDED_PREPARE in response_headers:
+                return response_headers[constants.HEADERS.ADDED_PREPARE]
 
         raise trino.exceptions.FailedToObtainAddedPrepareHeader
 
@@ -363,7 +363,7 @@ class Cursor(object):
         query = trino.client.TrinoQuery(copy.deepcopy(self._request), sql=sql)
         result = await query.execute(
             additional_http_headers={
-                constants.HEADER_PREPARED_STATEMENT: added_prepare_header
+                constants.HEADERS.PREPARED_STATEMENT: added_prepare_header
             }
         )
 
@@ -372,8 +372,8 @@ class Cursor(object):
         for _ in result:
             response_headers = result.response_headers
 
-            if constants.HEADER_DEALLOCATED_PREPARE in response_headers:
-                return response_headers[constants.HEADER_DEALLOCATED_PREPARE]
+            if constants.HEADERS.DEALLOCATED_PREPARE in response_headers:
+                return response_headers[constants.HEADERS.DEALLOCATED_PREPARE]
 
         raise trino.exceptions.FailedToObtainDeallocatedPrepareHeader
 
@@ -401,7 +401,7 @@ class Cursor(object):
                 )
                 result = await self._query.execute(
                     additional_http_headers={
-                        constants.HEADER_PREPARED_STATEMENT: added_prepare_header
+                        constants.HEADERS.PREPARED_STATEMENT: added_prepare_header
                     }
                 )
             finally:
