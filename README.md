@@ -26,9 +26,24 @@ conn = trino.dbapi.connect(
     catalog='the-catalog',
     schema='the-schema',
 )
-cur = conn.cursor()
-cur.execute('SELECT * FROM system.runtime.nodes')
-rows = cur.fetchall()
+await cur = conn.cursor()
+await cur.execute('SELECT * FROM system.runtime.nodes')
+await rows = cur.fetchall()
+await conn.close()
+```
+Or with context manager 
+```python
+import trino
+async with trino.dbapi.connect(
+    host='localhost',
+    port=8080,
+    user='the-user',
+    catalog='the-catalog',
+    schema='the-schema',
+) as conn:
+    await cur = conn.cursor()
+    await cur.execute('SELECT * FROM system.runtime.nodes')
+    await rows = cur.fetchall()
 ```
 
 This will query the `system.runtime.nodes` system tables that shows the nodes
