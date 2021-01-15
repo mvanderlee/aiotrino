@@ -9,28 +9,26 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
-import httpretty
+import asyncio
+import json
+from unittest import mock
+
+import aiohttp
+import aiohttp.web
 import pytest
-import requests
-import socket
-import time
+from aiohttp.test_utils import TestClient
+from aioresponses.core import RequestMatch
+from yarl import URL
 
-try:
-    from unittest import mock
-except ImportError:
-    # python 2
-    import mock
-
-from requests_kerberos.exceptions import KerberosExchangeError
-from trino.client import PROXIES, TrinoQuery, TrinoRequest, TrinoResult
-from trino.auth import KerberosAuthentication
-from trino import constants
 import trino.exceptions
+# from requests_kerberos.exceptions import KerberosExchangeError
+from trino import constants
+# from trino.auth import KerberosAuthentication
+# from trino.client import PROXIES, TrinoQuery, TrinoRequest, TrinoResult
+from trino.client import TrinoQuery, TrinoRequest, TrinoResult
 
+MOCK_URL = URL('http://mock')
 
 """
 This is the response to the first HTTP request (a POST) from an actual
@@ -258,22 +256,11 @@ RESP_ERROR_GET_0 = {
 }
 
 
-def get_json_post_0(self):
-    return RESP_DATA_POST_0
+@pytest.mark.asyncio
+async def test_trino_initial_request():
+    response_builder = RequestMatch(MOCK_URL, body=json.dumps(RESP_DATA_POST_0))
 
-
-def get_json_get_0(self):
-    return RESP_DATA_GET_0
-
-
-def get_json_get_error_0(self):
-    return RESP_ERROR_GET_0
-
-
-def test_trino_initial_request(monkeypatch):
-    monkeypatch.setattr(TrinoRequest.http.Response, "json", get_json_post_0)
-
-    req = TrinoRequest(
+    async with TrinoRequest(
         host="coordinator",
         port=8080,
         user="test",
@@ -282,14 +269,13 @@ def test_trino_initial_request(monkeypatch):
         schema="test",
         http_scheme="http",
         session_properties={},
-    )
+    ) as req:
+        http_resp = await response_builder.build_response(MOCK_URL)
+        http_resp.status_code = 200
+        status = await req.process(http_resp)
 
-    http_resp = TrinoRequest.http.Response()
-    http_resp.status_code = 200
-    status = req.process(http_resp)
-
-    assert status.next_uri == RESP_DATA_POST_0["nextUri"]
-    assert status.id == RESP_DATA_POST_0["id"]
+        assert status.next_uri == RESP_DATA_POST_0["nextUri"]
+        assert status.id == RESP_DATA_POST_0["id"]
 
 
 class ArgumentsRecorder(object):
@@ -300,17 +286,18 @@ class ArgumentsRecorder(object):
         self.args = None
         self.kwargs = None
 
-    def __call__(self, *args, **kwargs):
+    async def __call__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
 
 
-def test_request_headers(monkeypatch):
+@pytest.mark.asyncio
+async def test_request_headers(monkeypatch):
     post_recorder = ArgumentsRecorder()
-    monkeypatch.setattr(TrinoRequest.http.Session, "post", post_recorder)
+    monkeypatch.setattr(TrinoRequest.http.ClientSession, "post", post_recorder)
 
     get_recorder = ArgumentsRecorder()
-    monkeypatch.setattr(TrinoRequest.http.Session, "get", get_recorder)
+    monkeypatch.setattr(TrinoRequest.http.ClientSession, "get", get_recorder)
 
     catalog = "test_catalog"
     schema = "test_schema"
@@ -321,7 +308,17 @@ def test_request_headers(monkeypatch):
     client_info_header = constants.HEADER_CLIENT_INFO
     client_info_value = "some_client_info"
 
-    req = TrinoRequest(
+    def assert_headers(headers):
+        assert headers[constants.HEADER_CATALOG] == catalog
+        assert headers[constants.HEADER_SCHEMA] == schema
+        assert headers[constants.HEADER_SOURCE] == source
+        assert headers[constants.HEADER_USER] == user
+        assert headers[constants.HEADER_SESSION] == ""
+        assert headers[accept_encoding_header] == accept_encoding_value
+        assert headers[client_info_header] == client_info_value
+        assert len(headers.keys()) == 8
+
+    async with TrinoRequest(
         host="coordinator",
         port=8080,
         user=user,
@@ -335,34 +332,25 @@ def test_request_headers(monkeypatch):
             client_info_header: client_info_value,
         },
         redirect_handler=None,
-    )
+    ) as req:
 
-    def assert_headers(headers):
-        assert headers[constants.HEADER_CATALOG] == catalog
-        assert headers[constants.HEADER_SCHEMA] == schema
-        assert headers[constants.HEADER_SOURCE] == source
-        assert headers[constants.HEADER_USER] == user
-        assert headers[constants.HEADER_SESSION] == ""
-        assert headers[accept_encoding_header] == accept_encoding_value
-        assert headers[client_info_header] == client_info_value
-        assert len(headers.keys()) == 8
+        await req.post("URL")
+        assert_headers(post_recorder.kwargs["headers"])
 
-    req.post("URL")
-    assert_headers(post_recorder.kwargs["headers"])
-
-    req.get("URL")
-    assert_headers(get_recorder.kwargs["headers"])
+        await req.get("URL")
+        assert_headers(get_recorder.kwargs["headers"])
 
 
-def test_additional_request_post_headers(monkeypatch):
+@pytest.mark.asyncio
+async def test_additional_request_post_headers(monkeypatch):
     """
     Tests that the `TrinoRequest.post` function can take addtional headers
     and that it combines them with the existing ones to perform the request.
     """
     post_recorder = ArgumentsRecorder()
-    monkeypatch.setattr(TrinoRequest.http.Session, "post", post_recorder)
+    monkeypatch.setattr(TrinoRequest.http.ClientSession, "post", post_recorder)
 
-    req = TrinoRequest(
+    async with TrinoRequest(
         host="coordinator",
         port=8080,
         user="test",
@@ -371,127 +359,132 @@ def test_additional_request_post_headers(monkeypatch):
         schema="test",
         http_scheme="http",
         session_properties={},
-    )
+    ) as req:
+        sql = 'select 1'
+        additional_headers = {
+            'X-Trino-Fake-1': 'one',
+            'X-Trino-Fake-2': 'two',
+        }
 
-    sql = 'select 1'
-    additional_headers = {
-        'X-Trino-Fake-1': 'one',
-        'X-Trino-Fake-2': 'two',
-    }
+        combined_headers = req.http_headers
+        combined_headers.update(additional_headers)
 
-    combined_headers = req.http_headers
-    combined_headers.update(additional_headers)
+        await req.post(sql, additional_headers)
 
-    req.post(sql, additional_headers)
-
-    # Validate that the post call was performed including the addtional headers
-    assert post_recorder.kwargs['headers'] == combined_headers
+        # Validate that the post call was performed including the addtional headers
+        assert post_recorder.kwargs['headers'] == combined_headers
 
 
-def test_request_invalid_http_headers():
+@pytest.mark.asyncio
+async def test_request_invalid_http_headers():
     with pytest.raises(ValueError) as value_error:
-        TrinoRequest(
+        async with TrinoRequest(
             host="coordinator",
             port=8080,
             user="test",
             http_headers={constants.HEADER_USER: "invalid_header"},
-        )
+        ):
+            pass
     assert str(value_error.value).startswith("cannot override reserved HTTP header")
 
 
-def test_request_timeout():
+# @pytest.mark.asyncio -- don't mark as asyncio as it interferes with aiohttp_client
+async def test_request_timeout(aiohttp_client):
     timeout = 0.1
-    http_scheme = "http"
-    host = "coordinator"
-    port = 8080
-    url = http_scheme + "://" + host + ":" + str(port) + constants.URL_STATEMENT_PATH
 
-    def long_call(request, uri, headers):
-        time.sleep(timeout * 2)
-        return (200, headers, "delayed success")
+    async def long_call(url, **kwargs):
+        await asyncio.sleep(timeout * 2)
+        return aiohttp.web.Response(body="delayed success")
 
-    httpretty.enable()
-    for method in [httpretty.POST, httpretty.GET]:
-        httpretty.register_uri(method, url, body=long_call)
+    app = aiohttp.web.Application()
+    for method in [aiohttp.hdrs.METH_POST, aiohttp.hdrs.METH_GET]:
+        app.router.add_route(method, constants.URL_STATEMENT_PATH, long_call)
+
+    client: TestClient = await aiohttp_client(app)
+    http_scheme = client.server.scheme
+    host = client.server.host
+    port = client.server.port
+    url = client.make_url(constants.URL_STATEMENT_PATH)
 
     # timeout without retry
-    for request_timeout in [timeout, (timeout, timeout)]:
-        req = TrinoRequest(
+    for request_timeout in [{'total': timeout}, {'connect': timeout, 'sock_read': timeout}]:
+        async with TrinoRequest(
             host=host,
             port=port,
             user="test",
             http_scheme=http_scheme,
+            http_session=client.session,
             max_attempts=1,
-            request_timeout=request_timeout,
+            request_timeout=aiohttp.ClientTimeout(**request_timeout),
+        ) as req:
+
+            with pytest.raises(asyncio.TimeoutError):
+                await req.get(url)
+
+            with pytest.raises(asyncio.TimeoutError):
+                await req.post("select 1")
+
+
+@pytest.mark.asyncio
+async def test_trino_fetch_request():
+    response_builder = RequestMatch(MOCK_URL, body=json.dumps(RESP_DATA_GET_0))
+
+    async with TrinoRequest(
+        host="coordinator",
+        port=8080,
+        user="test",
+        source="test",
+        catalog="test",
+        schema="test",
+        http_scheme="http",
+        session_properties={},
+    ) as req:
+
+        http_resp = await response_builder.build_response(MOCK_URL)
+        http_resp.status = 200
+        status = await req.process(http_resp)
+
+        assert status.next_uri == RESP_DATA_GET_0["nextUri"]
+        assert status.id == RESP_DATA_GET_0["id"]
+        assert status.rows == RESP_DATA_GET_0["data"]
+
+
+@pytest.mark.asyncio
+async def test_trino_fetch_error():
+    response_builder = RequestMatch(MOCK_URL, body=json.dumps(RESP_ERROR_GET_0))
+
+    async with TrinoRequest(
+        host="coordinator",
+        port=8080,
+        user="test",
+        source="test",
+        catalog="test",
+        schema="test",
+        http_scheme="http",
+        session_properties={},
+    ) as req:
+
+        http_resp = await response_builder.build_response(MOCK_URL)
+        http_resp.status = 200
+        with pytest.raises(trino.exceptions.TrinoUserError) as exception_info:
+            await req.process(http_resp)
+        error = exception_info.value
+        assert error.error_code == 1
+        assert error.error_name == "SYNTAX_ERROR"
+        assert error.error_type == "USER_ERROR"
+        assert error.error_exception == "com.facebook.presto.sql.analyzer.SemanticException"
+        assert "stack" in error.failure_info
+        assert len(error.failure_info["stack"]) == 25
+        assert "suppressed" in error.failure_info
+        assert (
+            error.message
+            == "line 1:15: Schema must be specified when session schema is not set"
         )
-
-        with pytest.raises(requests.exceptions.Timeout):
-            req.get(url)
-
-        with pytest.raises(requests.exceptions.Timeout):
-            req.post("select 1")
-
-    httpretty.disable()
-    httpretty.reset()
+        assert error.error_location == (1, 15)
+        assert error.query_id == "20161116_205844_00002_xtnym"
 
 
-def test_trino_fetch_request(monkeypatch):
-    monkeypatch.setattr(TrinoRequest.http.Response, "json", get_json_get_0)
-
-    req = TrinoRequest(
-        host="coordinator",
-        port=8080,
-        user="test",
-        source="test",
-        catalog="test",
-        schema="test",
-        http_scheme="http",
-        session_properties={},
-    )
-
-    http_resp = TrinoRequest.http.Response()
-    http_resp.status_code = 200
-    status = req.process(http_resp)
-
-    assert status.next_uri == RESP_DATA_GET_0["nextUri"]
-    assert status.id == RESP_DATA_GET_0["id"]
-    assert status.rows == RESP_DATA_GET_0["data"]
-
-
-def test_trino_fetch_error(monkeypatch):
-    monkeypatch.setattr(TrinoRequest.http.Response, "json", get_json_get_error_0)
-
-    req = TrinoRequest(
-        host="coordinator",
-        port=8080,
-        user="test",
-        source="test",
-        catalog="test",
-        schema="test",
-        http_scheme="http",
-        session_properties={},
-    )
-
-    http_resp = TrinoRequest.http.Response()
-    http_resp.status_code = 200
-    with pytest.raises(trino.exceptions.TrinoUserError) as exception_info:
-        req.process(http_resp)
-    error = exception_info.value
-    assert error.error_code == 1
-    assert error.error_name == "SYNTAX_ERROR"
-    assert error.error_type == "USER_ERROR"
-    assert error.error_exception == "com.facebook.presto.sql.analyzer.SemanticException"
-    assert "stack" in error.failure_info
-    assert len(error.failure_info["stack"]) == 25
-    assert "suppressed" in error.failure_info
-    assert (
-        error.message
-        == "line 1:15: Schema must be specified when session schema is not set"
-    )
-    assert error.error_location == (1, 15)
-    assert error.query_id == "20161116_205844_00002_xtnym"
-
-
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_code, error_type, error_message",
     [
@@ -499,10 +492,10 @@ def test_trino_fetch_error(monkeypatch):
         (404, trino.exceptions.HttpError, "error 404"),
     ],
 )
-def test_trino_connection_error(monkeypatch, error_code, error_type, error_message):
-    monkeypatch.setattr(TrinoRequest.http.Response, "json", lambda x: {})
+async def test_trino_connection_error(error_code, error_type, error_message):
+    response_builder = RequestMatch(MOCK_URL, body=json.dumps({}))
 
-    req = TrinoRequest(
+    async with TrinoRequest(
         host="coordinator",
         port=8080,
         user="test",
@@ -511,13 +504,14 @@ def test_trino_connection_error(monkeypatch, error_code, error_type, error_messa
         schema="test",
         http_scheme="http",
         session_properties={},
-    )
+    ) as req:
 
-    http_resp = TrinoRequest.http.Response()
-    http_resp.status_code = error_code
-    with pytest.raises(error_type) as error:
-        req.process(http_resp)
-    assert error_message in str(error)
+        http_resp = await response_builder.build_response(MOCK_URL)
+        http_resp.status = error_code
+        print(http_resp)
+        with pytest.raises(error_type) as error:
+            await req.process(http_resp)
+        assert error_message in str(error)
 
 
 class RetryRecorder(object):
@@ -527,11 +521,15 @@ class RetryRecorder(object):
         self._error = error
         self._result = result
 
-    def __call__(self, *args, **kwargs):
+    async def __call__(self, *args, **kwargs):
+        print(f'call: {args}, {kwargs}')
+        print(self._result)
         self._retry_count += 1
         if self._error is not None:
             raise self._error
         if self._result is not None:
+            if callable(self._result):
+                return self._result()
             return self._result
 
     @property
@@ -539,53 +537,72 @@ class RetryRecorder(object):
         return self._retry_count
 
 
-def test_authentication_fail_retry(monkeypatch):
-    post_retry = RetryRecorder(error=KerberosExchangeError())
-    monkeypatch.setattr(TrinoRequest.http.Session, "post", post_retry)
+# TODO: Implement KERBEROS
+# async def test_authentication_fail_retry(aiohttp_client):
+#     app = aiohttp.web.Application()
+#     post_retry = RetryRecorder(error=KerberosExchangeError())
+#     app.router.add_route(aiohttp.hdrs.METH_POST, constants.URL_STATEMENT_PATH, post_retry)
+#     get_retry = RetryRecorder(error=KerberosExchangeError())
+#     app.router.add_route(aiohttp.hdrs.METH_GET, constants.URL_STATEMENT_PATH, get_retry)
 
-    get_retry = RetryRecorder(error=KerberosExchangeError())
-    monkeypatch.setattr(TrinoRequest.http.Session, "get", get_retry)
+#     client: TestClient = await aiohttp_client(app)
+#     http_scheme = client.server.scheme
+#     host = client.server.host
+#     port = client.server.port
 
-    attempts = 3
-    kerberos_auth = KerberosAuthentication()
-    req = TrinoRequest(
-        host="coordinator",
-        port=8080,
-        user="test",
-        http_scheme=constants.HTTPS,
-        auth=kerberos_auth,
-        max_attempts=attempts,
-    )
+#     attempts = 3
+#     kerberos_auth = KerberosAuthentication()
+#     async with TrinoRequest(
+#         host=host,
+#         port=port,
+#         user="test",
+#         http_scheme=http_scheme,
+#         http_session=client.session,
+#         auth=kerberos_auth,
+#         max_attempts=attempts,
+#     ) as req:
 
-    with pytest.raises(KerberosExchangeError):
-        req.post("URL")
-    assert post_retry.retry_count == attempts
+#         with pytest.raises(KerberosExchangeError):
+#             await req.post("URL")
+#         assert post_retry.retry_count == attempts
 
-    with pytest.raises(KerberosExchangeError):
-        req.get("URL")
-    assert post_retry.retry_count == attempts
+#         with pytest.raises(KerberosExchangeError):
+#             await req.get("URL")
+#         assert post_retry.retry_count == attempts
 
 
-def test_503_error_retry(monkeypatch):
-    http_resp = TrinoRequest.http.Response()
-    http_resp.status_code = 503
+async def test_503_error_retry(aiohttp_client):
+    # need a new response for every request
+    http_resp = lambda: aiohttp.web.Response(status=503)
+
+    app = aiohttp.web.Application()
 
     post_retry = RetryRecorder(result=http_resp)
-    monkeypatch.setattr(TrinoRequest.http.Session, "post", post_retry)
-
+    app.router.add_route(aiohttp.hdrs.METH_POST, constants.URL_STATEMENT_PATH, post_retry)
     get_retry = RetryRecorder(result=http_resp)
-    monkeypatch.setattr(TrinoRequest.http.Session, "get", get_retry)
+    app.router.add_route(aiohttp.hdrs.METH_GET, constants.URL_STATEMENT_PATH, get_retry)
+
+    client: TestClient = await aiohttp_client(app)
+    http_scheme = client.server.scheme
+    host = client.server.host
+    port = client.server.port
+    url = client.make_url(constants.URL_STATEMENT_PATH)
 
     attempts = 3
-    req = TrinoRequest(
-        host="coordinator", port=8080, user="test", max_attempts=attempts
-    )
+    async with TrinoRequest(
+        http_session=client.session,
+        http_scheme=http_scheme,
+        host=host,
+        port=port,
+        user="test",
+        max_attempts=attempts
+    ) as req:
 
-    req.post("URL")
-    assert post_retry.retry_count == attempts
+        await req.post("URL")
+        assert post_retry.retry_count == attempts
 
-    req.get("URL")
-    assert post_retry.retry_count == attempts
+        await req.get(url)
+        assert post_retry.retry_count == attempts
 
 
 class FakeGatewayResponse(object):
@@ -599,8 +616,8 @@ class FakeGatewayResponse(object):
         self.count += 1
         if self.count == self.redirect_count:
             return self.http_response
-        http_response = TrinoRequest.http.Response()
-        http_response.status_code = 301
+        http_response = TrinoRequest.http.ClientResponse()
+        http_response.status = 301
         http_response.headers["Location"] = "http://1.2.3.4:8080/new-path/"
         assert http_response.is_redirect
         return http_response
@@ -623,53 +640,60 @@ def test_trino_result_response_headers():
     assert result.response_headers == mock_trino_query.response_headers
 
 
-def test_trino_query_response_headers():
+async def test_trino_query_response_headers(aiohttp_client):
     """
     Validates that the `TrinoQuery.execute` function can take addtional headers
     that are pass the the provided request instance post function call and it
     returns a `TrinoResult` instance.
     """
-    class MockResponse(mock.Mock):
-        # Fake response class
-        @property
-        def headers(self):
-            return {
-                'X-Trino-Fake-1': 'one',
-                'X-Trino-Fake-2': 'two',
-            }
+    class MockResponse:
+        async def __call__(self, request):
+            self.request_headers = request.headers
 
-        def json(self):
-            return get_json_post_0(self)
+            return aiohttp.web.Response(
+                body=json.dumps(RESP_DATA_POST_0),
+                content_type='application/json',
+                headers={
+                    'X-Trino-Fake-1': 'one',
+                    'X-Trino-Fake-2': 'two',
+                }
+            )
 
-    req = TrinoRequest(
-        host="coordinator",
-        port=8080,
+    mock_post = MockResponse()
+    app = aiohttp.web.Application()
+    app.router.add_route(aiohttp.hdrs.METH_POST, constants.URL_STATEMENT_PATH, mock_post)
+
+    client: TestClient = await aiohttp_client(app)
+    http_scheme = client.server.scheme
+    host = client.server.host
+    port = client.server.port
+
+    async with TrinoRequest(
+        http_session=client.session,
+        http_scheme=http_scheme,
+        host=host,
+        port=port,
         user="test",
         source="test",
         catalog="test",
         schema="test",
-        http_scheme="http",
         session_properties={},
-    )
+    ) as req:
 
-    sql = 'execute my_stament using 1, 2, 3'
-    additional_headers = {
-        constants.HEADER_PREPARED_STATEMENT: 'my_statement=added_prepare_statement_header'
-    }
-
-    # Patch the post function to avoid making the requests, as well as to
-    # validate that the function was called with the right arguments.
-    with mock.patch.object(req, 'post', return_value=MockResponse()) as mock_post:
+        sql = 'execute my_stament using 1, 2, 3'
+        additional_headers = {
+            constants.HEADER_PREPARED_STATEMENT: 'my_statement=added_prepare_statement_header'
+        }
 
         query = TrinoQuery(
             request=req,
             sql=sql
         )
-        result = query.execute(additional_http_headers=additional_headers)
+        result = await query.execute(additional_http_headers=additional_headers)
 
-        # Validate the the post function was called with the right argguments
-        mock_post.assert_called_once_with(sql, additional_headers)
+        # Validate the the post function was called with the right arguments
+        for key, value in additional_headers.items():
+            assert mock_post.request_headers.get(key) == value
 
         # Validate the result is an instance of TrinoResult
         assert isinstance(result, TrinoResult)
-

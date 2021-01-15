@@ -32,17 +32,16 @@ The main interface is :class:`TrinoQuery`: ::
     >> query =  TrinoQuery(request, sql)
     >> rows = list(query.execute())
 """
-from __future__ import absolute_import, division, print_function
 
 import copy
 import os
 from typing import Any, Dict, List, Optional, Text, Tuple, Union  # NOQA for mypy types
 
+import aiohttp
+
 import trino.logging
-import requests
 from trino import constants, exceptions
 from trino.transaction import NO_TRANSACTION
-
 
 __all__ = ["TrinoQuery", "TrinoRequest"]
 
@@ -95,6 +94,11 @@ def get_header_values(headers, header):
 def get_session_property_values(headers, header):
     kvs = get_header_values(headers, header)
     return [(k.strip(), v.strip()) for k, v in (kv.split("=", 1) for kv in kvs)]
+
+
+def is_redirect(http_response) -> bool:
+    # type: (aiohttp.ClientResponse) -> bool
+    return ('location' in http_response.headers and http_response.status in (301, 302, 303, 307, 308))
 
 
 class TrinoStatus(object):
@@ -184,11 +188,11 @@ class TrinoRequest(object):
     the client.
     """
 
-    http = requests
+    http = aiohttp
 
     HTTP_EXCEPTIONS = (
-        http.ConnectionError,  # type: ignore
-        http.Timeout,  # type: ignore
+        aiohttp.ServerConnectionError,  # type: ignore
+        aiohttp.ServerTimeoutError,  # type: ignore
     )
 
     def __init__(
@@ -200,7 +204,7 @@ class TrinoRequest(object):
         catalog=None,  # type: Text
         schema=None,  # type: Text
         session_properties=None,  # type: Optional[Dict[Text, Any]]
-        http_session=None,  # type: Any
+        http_session=None,  # type: aiohttp.ClientSession
         http_headers=None,  # type: Optional[Dict[Text, Text]]
         transaction_id=NO_TRANSACTION,  # type: Optional[Text]
         http_scheme=constants.HTTP,  # type: Text
@@ -209,7 +213,7 @@ class TrinoRequest(object):
         max_attempts=MAX_ATTEMPTS,  # type: int
         request_timeout=constants.DEFAULT_REQUEST_TIMEOUT,  # type: Union[float, Tuple[float, float]]
         handle_retry=exceptions.RetryWithExponentialBackoff(),
-        verify=True     # type: Any
+        verify=True     # type: bool
     ):
         # type: (...) -> None
         self._client_session = ClientSession(
@@ -228,10 +232,13 @@ class TrinoRequest(object):
 
         if http_session is not None:
             self._http_session = http_session
+            self._close_session = False
         else:
             # mypy cannot follow module import
-            self._http_session = self.http.Session()  # type: ignore
-            self._http_session.verify = verify
+            self._http_session = self.http.ClientSession(
+                connector=self.http.TCPConnector(verify_ssl=verify)
+            )  # type: ignore
+            self._close_session = True
         self._http_session.headers.update(self.http_headers)
         self._exceptions = self.HTTP_EXCEPTIONS
         self._auth = auth
@@ -246,6 +253,21 @@ class TrinoRequest(object):
         self._handle_retry = handle_retry
         self.max_attempts = max_attempts
         self._http_scheme = http_scheme
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *excinfo):
+        await self.close()
+
+    async def _close_http_session(self):
+        if self._http_session and self._close_session:
+            if not self._http_session.closed:
+                await self._http_session.connector.close()
+            self._http_session = None
+
+    async def close(self):
+        await self._close_http_session()
 
     @property
     def transaction_id(self):
@@ -280,7 +302,7 @@ class TrinoRequest(object):
         transaction_id = self._client_session.transaction_id
         headers[constants.HEADER_TRANSACTION] = transaction_id
 
-        return headers
+        return {k: v for k, v in headers.items() if v is not None}
 
     @property
     def max_attempts(self):
@@ -302,7 +324,7 @@ class TrinoRequest(object):
             exceptions=self._exceptions,
             conditions=(
                 # need retry when there is no exception but the status code is 503
-                lambda response: getattr(response, "status_code", None)
+                lambda response: getattr(response, "status", None)
                 == 503,
             ),
             max_attempts=self._max_attempts,
@@ -327,7 +349,7 @@ class TrinoRequest(object):
         # type: () -> Text
         return self._next_uri
 
-    def post(self, sql, additional_http_headers=None):
+    async def post(self, sql, additional_http_headers=None):
         data = sql.encode("utf-8")
         # Deep copy of the http_headers dict since they may be modified for this
         # request by the provided additional_http_headers
@@ -336,39 +358,43 @@ class TrinoRequest(object):
         # Update the request headers with the additional_http_headers
         http_headers.update(additional_http_headers or {})
 
-        http_response = self._post(
+        http_response = await self._post(
             self.statement_url,
             data=data,
             headers=http_headers,
             timeout=self._request_timeout,
             allow_redirects=self._redirect_handler is None,
-            proxies=PROXIES,
+            # TODO: proxies=PROXIES,
         )
         if self._redirect_handler is not None:
-            while http_response is not None and http_response.is_redirect:
+            while http_response is not None and is_redirect(http_response):
                 location = http_response.headers["Location"]
                 url = self._redirect_handler.handle(location)
-                logger.info("redirect %s from %s to %s", http_response.status_code, location, url)
-                http_response = self._post(
+                logger.info("redirect %s from %s to %s", http_response.status, location, url)
+                http_response = await self._post(
                     url,
                     data=data,
                     headers=http_headers,
                     timeout=self._request_timeout,
                     allow_redirects=False,
-                    proxies=PROXIES,
+                    # TODO: proxies=PROXIES,
                 )
         return http_response
 
-    def get(self, url):
-        return self._get(
+    async def get(self, url):
+        return await self._get(
             url,
             headers=self.http_headers,
             timeout=self._request_timeout,
-            proxies=PROXIES,
+            # TODO: proxies=PROXIES,
         )
 
-    def delete(self, url):
-        return self._delete(url, timeout=self._request_timeout, proxies=PROXIES)
+    async def delete(self, url):
+        return await self._delete(
+            url,
+            timeout=self._request_timeout,
+            # TODO: proxies=PROXIES,
+        )
 
     def _process_error(self, error, query_id):
         error_type = error["errorType"]
@@ -379,25 +405,25 @@ class TrinoRequest(object):
 
         return exceptions.TrinoQueryError(error, query_id)
 
-    def raise_response_error(self, http_response):
-        if http_response.status_code == 503:
+    async def raise_response_error(self, http_response):
+        # type: (aiohttp.ClientResponse) -> None
+        if http_response.status == 503:
             raise exceptions.Http503Error("error 503: service unavailable")
 
         raise exceptions.HttpError(
             "error {}{}".format(
-                http_response.status_code,
+                http_response.status,
                 ": {}".format(http_response.content) if http_response.content else "",
             )
         )
 
-    def process(self, http_response):
-        # type: (requests.Response) -> TrinoStatus
+    async def process(self, http_response):
+        # type: (aiohttp.ClientResponse) -> TrinoStatus
         if not http_response.ok:
-            self.raise_response_error(http_response)
+            await self.raise_response_error(http_response)
 
-        http_response.encoding = "utf-8"
-        response = http_response.json()
-        logger.debug("HTTP %s: %s", http_response.status_code, response)
+        response = await http_response.json()
+        logger.debug("HTTP %s: %s", http_response.status, response)
         if "error" in response:
             raise self._process_error(response["error"], response.get("id"))
 
@@ -444,7 +470,7 @@ class TrinoResult(object):
         # type: () -> int
         return self._rownumber
 
-    def __iter__(self):
+    async def __aiter__(self):
         # Initial fetch from the first POST request
         for row in self._rows:
             self._rownumber += 1
@@ -453,7 +479,7 @@ class TrinoResult(object):
 
         # Subsequent fetches from GET requests until next_uri is empty.
         while not self._query.is_finished():
-            rows = self._query.fetch()
+            rows = await self._query.fetch()
             for row in rows:
                 self._rownumber += 1
                 logger.debug("row %s", row)
@@ -502,8 +528,8 @@ class TrinoQuery(object):
     def result(self):
         return self._result
 
-    def execute(self, additional_http_headers=None):
-        # type: () -> TrinoResult
+    async def execute(self, additional_http_headers=None):
+        # type: (...) -> TrinoResult
         """Initiate a Trino query by sending the SQL statement
 
         This is the first HTTP request sent to the coordinator.
@@ -514,8 +540,8 @@ class TrinoQuery(object):
         if self._cancelled:
             raise exceptions.TrinoUserError("Query has been cancelled", self.query_id)
 
-        response = self._request.post(self._sql, additional_http_headers)
-        status = self._request.process(response)
+        response = await self._request.post(self._sql, additional_http_headers)
+        status = await self._request.process(response)
         self.query_id = status.id
         self._stats.update({u"queryId": self.query_id})
         self._stats.update(status.stats)
@@ -525,11 +551,11 @@ class TrinoQuery(object):
         self._result = TrinoResult(self, status.rows)
         return self._result
 
-    def fetch(self):
+    async def fetch(self):
         # type: () -> List[List[Any]]
         """Continue fetching data for the current query_id"""
-        response = self._request.get(self._request.next_uri)
-        status = self._request.process(response)
+        response = await self._request.get(self._request.next_uri)
+        status = await self._request.process(response)
         if status.columns:
             self._columns = status.columns
         self._stats.update(status.stats)
@@ -539,7 +565,7 @@ class TrinoQuery(object):
             self._finished = True
         return status.rows
 
-    def cancel(self):
+    async def cancel(self):
         # type: () -> None
         """Cancel the current query"""
         if self.query_id is None or self.is_finished():
@@ -548,12 +574,12 @@ class TrinoQuery(object):
         self._cancelled = True
         url = self._request.get_url("/v1/query/{}".format(self.query_id))
         logger.debug("cancelling query: %s", self.query_id)
-        response = self._request.delete(url)
+        response = await self._request.delete(url)
         logger.info(response)
-        if response.status_code == requests.codes.no_content:
+        if response.status == 204:
             logger.debug("query cancelled: %s", self.query_id)
             return
-        self._request.raise_response_error(response)
+        await self._request.raise_response_error(response)
 
     def is_finished(self):
         # type: () -> bool

@@ -15,12 +15,10 @@ This module defines exceptions for Trino operations. It follows the structure
 defined in pep-0249.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+
+import pytest
 
 from trino import exceptions
-import pytest
 
 
 def test_delay_exponential_without_jitter():
@@ -52,7 +50,8 @@ class SomeException(Exception):
     pass
 
 
-def test_retry_with():
+@pytest.mark.asyncio
+async def test_retry_with():
     max_attempts = 3
     with_retry = exceptions.retry_with(
         handle_retry=exceptions.RetryWithExponentialBackoff(),
@@ -66,12 +65,12 @@ def test_retry_with():
             self.attempt = 0
             self._until = until
 
-        def __call__(self):
+        async def __call__(self):
             self.attempt += 1
             if self.attempt > self._until:
                 return
             raise SomeException(self.attempt)
 
-    with_retry(FailerUntil(2).__call__)()
+    await with_retry(FailerUntil(2).__call__)()
     with pytest.raises(SomeException):
-        with_retry(FailerUntil(3).__call__)()
+        await with_retry(FailerUntil(3).__call__)()

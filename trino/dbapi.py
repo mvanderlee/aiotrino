@@ -17,30 +17,20 @@ https://www.python.org/dev/peps/pep-0249/ .
 Fetch methods returns rows as a list of lists on purpose to let the caller
 decide to convert then to a list of tuples.
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-from typing import Any, List, Optional  # NOQA for mypy types
-
-try:
-    from urllib.parse import urlencode
-except ImportError:
-    # Python 2
-    from urllib import urlencode
 
 import copy
-import uuid
 import datetime
-import re
 import math
+import uuid
+from typing import Any, List, Optional  # NOQA for mypy types
 
-from trino import constants
-import trino.exceptions
+import aiohttp
+
 import trino.client
+import trino.exceptions
 import trino.logging
-from trino.transaction import Transaction, IsolationLevel, NO_TRANSACTION
-
+from trino import constants
+from trino.transaction import NO_TRANSACTION, IsolationLevel, Transaction
 
 __all__ = ["connect", "Connection", "Cursor"]
 
@@ -50,6 +40,21 @@ threadsafety = 2
 paramstyle = "qmark"
 
 logger = trino.logging.get_logger(__name__)
+
+
+# Async Helper functions
+def aiter(async_iterable):
+    if not hasattr(async_iterable, '__aiter__'):
+        raise TypeError(f"'{type(async_iterable)}' object is not an async iterable")
+
+    return async_iterable.__aiter__()
+
+
+def anext(async_iterator):
+    if not hasattr(async_iterator, '__anext__'):
+        raise TypeError(f"'{type(async_iterator)}' object is not an awaitable iterator")
+
+    return async_iterator.__anext__()
 
 
 def connect(*args, **kwargs):
@@ -96,8 +101,9 @@ class Connection(object):
         self.schema = schema
         self.session_properties = session_properties
         # mypy cannot follow module import
-        self._http_session = trino.client.TrinoRequest.http.Session()
-        self._http_session.verify = verify
+        self._http_session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(verify_ssl=verify)
+        )  # type: ignore
         self.http_headers = http_headers
         self.http_scheme = http_scheme
         self.auth = auth
@@ -117,37 +123,40 @@ class Connection(object):
     def transaction(self):
         return self._transaction
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(self, exc_type, exc_value, traceback):
         try:
-            self.commit()
+            await self.commit()
         except Exception:
-            self.rollback()
+            await self.rollback()
         else:
-            self.close()
+            await self.close()
 
-    def close(self):
+    async def close(self):
         """Trino does not have anything to close"""
         # TODO cancel outstanding queries?
-        pass
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.connector.close()
 
-    def start_transaction(self):
+    async def start_transaction(self):
         self._transaction = Transaction(self._create_request())
-        self._transaction.begin()
+        await self._transaction.begin()
         return self._transaction
 
-    def commit(self):
+    async def commit(self):
         if self.transaction is None:
             return
-        self._transaction.commit()
+        await self._transaction.commit()
+        await self._transaction.close()
         self._transaction = None
 
-    def rollback(self):
+    async def rollback(self):
         if self.transaction is None:
             raise RuntimeError("no transaction was started")
-        self._transaction.rollback()
+        await self._transaction.rollback()
+        await self._transaction.close()
         self._transaction = None
 
     def _create_request(self):
@@ -169,11 +178,11 @@ class Connection(object):
             self.request_timeout,
         )
 
-    def cursor(self):
+    async def cursor(self):
         """Return a new :py:class:`Cursor` object using the connection."""
         if self.isolation_level != IsolationLevel.AUTOCOMMIT:
             if self.transaction is None:
-                self.start_transaction()
+                await self.start_transaction()
             request = self.transaction._request
         else:
             request = self._create_request()
@@ -188,7 +197,7 @@ class Cursor(object):
 
     """
 
-    def __init__(self, connection, request):
+    def __init__(self, connection: Connection, request: trino.client.TrinoRequest):
         if not isinstance(connection, Connection):
             raise ValueError(
                 "connection must be a Connection object: {}".format(type(connection))
@@ -200,7 +209,7 @@ class Cursor(object):
         self._iterator = None
         self._query = None
 
-    def __iter__(self):
+    async def __aiter__(self):
         return self._iterator
 
     @property
@@ -247,7 +256,7 @@ class Cursor(object):
     def setoutputsize(self, size, column):
         raise trino.exceptions.NotSupportedError
 
-    def _prepare_statement(self, operation, statement_name):
+    async def _prepare_statement(self, operation, statement_name):
         """
         Prepends the given `operation` with "PREPARE <statement_name> FROM" and
         executes as a prepare statement.
@@ -271,7 +280,7 @@ class Cursor(object):
         # Send prepare statement. Copy the _request object to avoid poluting the
         # one that is going to be used to execute the actual operation.
         query = trino.client.TrinoQuery(copy.deepcopy(self._request), sql=sql)
-        result = query.execute()
+        result = await query.execute()
 
         # Iterate until the 'X-Trino-Added-Prepare' header is found or
         # until there are no more results
@@ -282,7 +291,6 @@ class Cursor(object):
                 return response_headers[constants.HEADER_ADDED_PREPARE]
 
         raise trino.exceptions.FailedToObtainAddedPrepareHeader
-
 
     def _get_added_prepare_statement_trino_query(
         self,
@@ -347,14 +355,13 @@ class Cursor(object):
 
         raise trino.exceptions.NotSupportedError("Query parameter of type '%s' is not supported." % type(param))
 
-
-    def _deallocate_prepare_statement(self, added_prepare_header, statement_name):
+    async def _deallocate_prepare_statement(self, added_prepare_header, statement_name):
         sql = 'DEALLOCATE PREPARE ' + statement_name
 
         # Send deallocate statement. Copy the _request object to avoid poluting the
         # one that is going to be used to execute the actual operation.
         query = trino.client.TrinoQuery(copy.deepcopy(self._request), sql=sql)
-        result = query.execute(
+        result = await query.execute(
             additional_http_headers={
                 constants.HEADER_PREPARED_STATEMENT: added_prepare_header
             }
@@ -373,7 +380,7 @@ class Cursor(object):
     def _generate_unique_statement_name(self):
         return 'st_' + uuid.uuid4().hex.replace('-', '')
 
-    def execute(self, operation, params=None):
+    async def execute(self, operation, params=None):
         if params:
             assert isinstance(params, (list, tuple)), (
                 'params must be a list or tuple containing the query '
@@ -382,7 +389,7 @@ class Cursor(object):
 
             statement_name = self._generate_unique_statement_name()
             # Send prepare statement
-            added_prepare_header = self._prepare_statement(
+            added_prepare_header = await self._prepare_statement(
                 operation, statement_name
             )
 
@@ -392,7 +399,7 @@ class Cursor(object):
                 self._query = self._get_added_prepare_statement_trino_query(
                     statement_name, params
                 )
-                result = self._query.execute(
+                result = await self._query.execute(
                     additional_http_headers={
                         constants.HEADER_PREPARED_STATEMENT: added_prepare_header
                     }
@@ -401,18 +408,18 @@ class Cursor(object):
                 # Send deallocate statement
                 # At this point the query can be deallocated since it has already
                 # been executed
-                self._deallocate_prepare_statement(added_prepare_header, statement_name)
+                await self._deallocate_prepare_statement(added_prepare_header, statement_name)
 
         else:
             self._query = trino.client.TrinoQuery(self._request, sql=operation)
-            result = self._query.execute()
-        self._iterator = iter(result)
+            result = await self._query.execute()
+        self._iterator = aiter(result)
         return result
 
     def executemany(self, operation, seq_of_params):
         raise trino.exceptions.NotSupportedError
 
-    def fetchone(self):
+    async def fetchone(self):
         # type: () -> Optional[List[Any]]
         """
 
@@ -424,13 +431,13 @@ class Cursor(object):
         """
 
         try:
-            return next(self._iterator)
+            return await anext(self._iterator)
         except StopIteration:
             return None
         except trino.exceptions.HttpError as err:
             raise trino.exceptions.OperationalError(str(err))
 
-    def fetchmany(self, size=None):
+    async def fetchmany(self, size=None):
         # type: (Optional[int]) -> List[List[Any]]
         """
         PEP-0249: Fetch the next set of rows of a query result, returning a
@@ -457,29 +464,30 @@ class Cursor(object):
 
         result = []
         for _ in range(size):
-            row = self.fetchone()
+            row = await self.fetchone()
             if row is None:
                 break
             result.append(row)
 
         return result
 
-    def genall(self):
-        return self._query.result
+    async def genall(self):
+        return await self._query.result
 
-    def fetchall(self):
+    async def fetchall(self):
         # type: () -> List[List[Any]]
-        return list(self.genall())
+        return list(await self.genall())
 
-    def cancel(self):
+    async def cancel(self):
         if self._query is None:
             raise trino.exceptions.OperationalError(
                 "Cancel query failed; no running query"
             )
-        self._query.cancel()
+        await self._query.cancel()
 
-    def close(self):
-        self._connection.close()
+    async def close(self):
+        await self._request.close()
+        await self._connection.close()
 
 
 Date = datetime.date

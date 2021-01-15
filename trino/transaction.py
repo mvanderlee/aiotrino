@@ -9,15 +9,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
-from trino import constants
 import trino.client
 import trino.exceptions
 import trino.logging
-
+from trino import constants
 
 logger = trino.logging.get_logger(__name__)
 
@@ -59,8 +55,8 @@ class Transaction(object):
     def id(self):
         return self._id
 
-    def begin(self):
-        response = self._request.post(START_TRANSACTION)
+    async def begin(self):
+        response = await self._request.post(START_TRANSACTION)
         if not response.ok:
             raise trino.exceptions.DatabaseError(
                 "failed to start transaction: {}".format(response.status_code)
@@ -68,20 +64,20 @@ class Transaction(object):
         transaction_id = response.headers.get(constants.HEADER_STARTED_TRANSACTION)
         if transaction_id and transaction_id != NO_TRANSACTION:
             self._id = response.headers[constants.HEADER_STARTED_TRANSACTION]
-        status = self._request.process(response)
+        status = await self._request.process(response)
         while status.next_uri:
-            response = self._request.get(status.next_uri)
+            response = await self._request.get(status.next_uri)
             transaction_id = response.headers.get(constants.HEADER_STARTED_TRANSACTION)
             if transaction_id and transaction_id != NO_TRANSACTION:
                 self._id = response.headers[constants.HEADER_STARTED_TRANSACTION]
-            status = self._request.process(response)
+            status = await self._request.process(response)
         self._request.transaction_id = self._id
         logger.info("transaction started: " + self._id)
 
-    def commit(self):
+    async def commit(self):
         query = trino.client.TrinoQuery(self._request, COMMIT)
         try:
-            list(query.execute())
+            list(await query.execute())
         except Exception as err:
             raise trino.exceptions.DatabaseError(
                 "failed to commit transaction {}: {}".format(self._id, err)
@@ -89,13 +85,16 @@ class Transaction(object):
         self._id = NO_TRANSACTION
         self._request.transaction_id = self._id
 
-    def rollback(self):
+    async def rollback(self):
         query = trino.client.TrinoQuery(self._request, ROLLBACK)
         try:
-            list(query.execute())
+            list(await query.execute())
         except Exception as err:
             raise trino.exceptions.DatabaseError(
                 "failed to rollback transaction {}: {}".format(self._id, err)
             )
         self._id = NO_TRANSACTION
         self._request.transaction_id = self._id
+
+    async def close(self):
+        self._request.close()
