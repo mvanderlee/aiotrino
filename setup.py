@@ -14,9 +14,9 @@
 
 import ast
 import re
-from setuptools import setup
 import textwrap
 
+from setuptools import setup
 
 _version_re = re.compile(r"__version__\s+=\s+(.*)")
 
@@ -31,9 +31,7 @@ kerberos_require = ["requests_kerberos"]
 
 all_require = [kerberos_require]
 
-tests_require = all_require + ["httpretty", "pytest", "pytest-runner", "mock", "pytz"]
-
-py27_require = ["ipaddress", "typing"]
+tests_require = all_require + ["pytest", "pytest-aiohttp", "pytest-asyncio", "pytest-runner", "aioresponses", "click", "mock", "pytz"]
 
 setup(
     name="trino",
@@ -68,11 +66,10 @@ setup(
         "Programming Language :: Python :: Implementation :: PyPy",
         "Topic :: Database :: Front-Ends",
     ],
-    install_requires=["click", "requests", "six"],
+    install_requires=["aiohttp"],
     extras_require={
         "all": all_require,
         "kerberos": kerberos_require,
         "tests": tests_require,
-        ':python_version=="2.7"': py27_require,
     },
 )
