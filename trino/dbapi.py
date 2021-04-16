@@ -18,7 +18,6 @@ Fetch methods returns rows as a list of lists on purpose to let the caller
 decide to convert then to a list of tuples.
 """
 
-import copy
 import datetime
 import math
 import uuid
@@ -279,12 +278,12 @@ class Cursor(object):
 
         # Send prepare statement. Copy the _request object to avoid poluting the
         # one that is going to be used to execute the actual operation.
-        query = trino.client.TrinoQuery(copy.deepcopy(self._request), sql=sql)
+        query = trino.client.TrinoQuery(self._request.clone(), sql=sql)
         result = await query.execute()
 
         # Iterate until the 'X-Trino-Added-Prepare' header is found or
         # until there are no more results
-        for _ in result:
+        async for _ in result:
             response_headers = result.response_headers
 
             if constants.HEADERS.ADDED_PREPARE in response_headers:
@@ -360,7 +359,7 @@ class Cursor(object):
 
         # Send deallocate statement. Copy the _request object to avoid poluting the
         # one that is going to be used to execute the actual operation.
-        query = trino.client.TrinoQuery(copy.deepcopy(self._request), sql=sql)
+        query = trino.client.TrinoQuery(self._request.clone(), sql=sql)
         result = await query.execute(
             additional_http_headers={
                 constants.HEADERS.PREPARED_STATEMENT: added_prepare_header
@@ -369,7 +368,7 @@ class Cursor(object):
 
         # Iterate until the 'X-Trino-Deallocated-Prepare' header is found or
         # until there are no more results
-        for _ in result:
+        async for _ in result:
             response_headers = result.response_headers
 
             if constants.HEADERS.DEALLOCATED_PREPARE in response_headers:

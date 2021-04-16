@@ -253,6 +253,30 @@ class TrinoRequest(object):
         self._handle_retry = handle_retry
         self.max_attempts = max_attempts
         self._http_scheme = http_scheme
+        self._verify = verify
+
+    def clone(self):
+        '''Because copy.deepcopy doesn't work with Futures'''
+        return TrinoRequest(
+            host=self._host,
+            port=self._port,
+            user=self._client_session.user,
+            source=self._client_session.source,
+            catalog=self._client_session.catalog,
+            schema=self._client_session.schema,
+            session_properties=self._client_session.properties,
+            http_headers=self._client_session.headers,
+            transaction_id=self._client_session.transaction_id,
+            auth=self._auth,
+            http_scheme=self._http_scheme,
+            redirect_handler=self._redirect_handler,
+            max_attempts=self.max_attempts,
+            request_timeout=self._request_timeout,
+            handle_retry=self._handle_retry,
+            verify=self._verify,
+
+            http_session=None if self._close_session else self._http_session,
+        )
 
     async def __aenter__(self):
         return self
