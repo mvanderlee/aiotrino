@@ -20,12 +20,13 @@ from uuid import uuid4
 
 import click
 import pytest
-import trino.logging
-from trino.client import TrinoQuery, TrinoRequest
-from trino.constants import DEFAULT_PORT
-from trino.exceptions import TimeoutError
 
-logger = trino.logging.get_logger(__name__)
+import aiotrino.logging
+from aiotrino.client import TrinoQuery, TrinoRequest
+from aiotrino.constants import DEFAULT_PORT
+from aiotrino.exceptions import TimeoutError
+
+logger = aiotrino.logging.get_logger(__name__)
 
 
 TRINO_VERSION = os.environ.get("TRINO_VERSION") or "351"
@@ -78,7 +79,7 @@ async def wait_for_trino_workers(host, port, timeout=180):
     t0 = time.time()
     while True:
         query = TrinoQuery(request, sql)
-        rows = list(await query.execute())
+        rows = [x async for x in await query.execute()]
         if any(row[0] == "active" for row in rows):
             break
         if time.time() - t0 > timeout:
@@ -149,7 +150,7 @@ def image_exists(name):
     return images and images[0].strip() == name
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 async def run_trino():
     image_tag = os.environ.get("TRINO_IMAGE")
     if not image_tag:

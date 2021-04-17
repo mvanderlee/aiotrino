@@ -10,12 +10,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import trino.client
-import trino.exceptions
-import trino.logging
-from trino import constants
+import aiotrino.client
+import aiotrino.exceptions
+import aiotrino.logging
+from aiotrino import constants
 
-logger = trino.logging.get_logger(__name__)
+logger = aiotrino.logging.get_logger(__name__)
 
 
 NO_TRANSACTION = "NONE"
@@ -58,7 +58,7 @@ class Transaction(object):
     async def begin(self):
         response = await self._request.post(START_TRANSACTION)
         if not response.ok:
-            raise trino.exceptions.DatabaseError(
+            raise aiotrino.exceptions.DatabaseError(
                 "failed to start transaction: {}".format(response.status_code)
             )
         transaction_id = response.headers.get(constants.HEADERS.STARTED_TRANSACTION)
@@ -75,26 +75,28 @@ class Transaction(object):
         logger.info("transaction started: " + self._id)
 
     async def commit(self):
-        query = trino.client.TrinoQuery(self._request, COMMIT)
+        query = aiotrino.client.TrinoQuery(self._request, COMMIT)
         try:
-            list(await query.execute())
+            # loop through to catch any exceptions
+            [x async for x in await query.execute()]
         except Exception as err:
-            raise trino.exceptions.DatabaseError(
+            raise aiotrino.exceptions.DatabaseError(
                 "failed to commit transaction {}: {}".format(self._id, err)
             )
         self._id = NO_TRANSACTION
         self._request.transaction_id = self._id
 
     async def rollback(self):
-        query = trino.client.TrinoQuery(self._request, ROLLBACK)
+        query = aiotrino.client.TrinoQuery(self._request, ROLLBACK)
         try:
-            list(await query.execute())
+            # loop through to catch any exceptions
+            [x async for x in await query.execute()]
         except Exception as err:
-            raise trino.exceptions.DatabaseError(
+            raise aiotrino.exceptions.DatabaseError(
                 "failed to rollback transaction {}: {}".format(self._id, err)
             )
         self._id = NO_TRANSACTION
         self._request.transaction_id = self._id
 
     async def close(self):
-        self._request.close()
+        await self._request.close()

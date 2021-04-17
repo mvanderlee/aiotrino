@@ -21,7 +21,7 @@ from setuptools import setup
 _version_re = re.compile(r"__version__\s+=\s+(.*)")
 
 
-with open("trino/__init__.py", "rb") as f:
+with open("aiotrino/__init__.py", "rb") as f:
     version = str(
         ast.literal_eval(_version_re.search(f.read().decode("utf-8")).group(1))
     )
@@ -34,17 +34,17 @@ all_require = [kerberos_require]
 tests_require = all_require + ["pytest", "pytest-aiohttp", "pytest-asyncio", "pytest-runner", "aioresponses", "click", "mock", "pytz"]
 
 setup(
-    name="trino",
-    author="Trino Team",
-    author_email="python-client@trino.io",
+    name="aiotrino",
+    author="Michiel Van Der Lee, Trino Team",
+    author_email="jmt.vanderlee@gmail.com",
     version=version,
-    url="https://github.com/trinodb/trino-python-client",
-    packages=["trino"],
+    url="https://github.com/mvanderlee/trino-python-client",
+    packages=["aiotrino"],
     package_data={"": ["LICENSE", "README.md"]},
-    description="Client for the Trino distributed SQL Engine",
+    description="ASyncIO Client for the Trino distributed SQL Engine",
     long_description=textwrap.dedent(
         """
-    Client for Trino (https://trino.io), a distributed SQL engine for
+    ASyncIO Client for Trino (https://trino.io), a distributed SQL engine for
     interactive and batch big data processing. Provides a low-level client and
     a DBAPI 2.0 implementation.
     """

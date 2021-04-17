@@ -25,11 +25,12 @@ from typing import Any, List, Optional  # NOQA for mypy types
 
 import aiohttp
 
-import trino.client
-import trino.exceptions
-import trino.logging
-from trino import constants
-from trino.transaction import NO_TRANSACTION, IsolationLevel, Transaction
+import aiotrino.client
+import aiotrino.exceptions
+import aiotrino.logging
+from aiotrino import constants
+from aiotrino.transaction import NO_TRANSACTION, IsolationLevel, Transaction
+from aiotrino.utils import aiter, anext
 
 __all__ = ["connect", "Connection", "Cursor"]
 
@@ -38,22 +39,7 @@ apilevel = "2.0"
 threadsafety = 2
 paramstyle = "qmark"
 
-logger = trino.logging.get_logger(__name__)
-
-
-# Async Helper functions
-def aiter(async_iterable):
-    if not hasattr(async_iterable, '__aiter__'):
-        raise TypeError(f"'{type(async_iterable)}' object is not an async iterable")
-
-    return async_iterable.__aiter__()
-
-
-def anext(async_iterator):
-    if not hasattr(async_iterator, '__anext__'):
-        raise TypeError(f"'{type(async_iterator)}' object is not an awaitable iterator")
-
-    return async_iterator.__anext__()
+logger = aiotrino.logging.get_logger(__name__)
 
 
 def connect(*args, **kwargs):
@@ -100,9 +86,7 @@ class Connection(object):
         self.schema = schema
         self.session_properties = session_properties
         # mypy cannot follow module import
-        self._http_session = aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(verify_ssl=verify)
-        )  # type: ignore
+        self._http_session = None
         self.http_headers = http_headers
         self.http_scheme = http_scheme
         self.auth = auth
@@ -113,6 +97,7 @@ class Connection(object):
         self._isolation_level = isolation_level
         self._request = None
         self._transaction = None
+        self._verify_ssl = verify
 
     @property
     def isolation_level(self):
@@ -159,7 +144,14 @@ class Connection(object):
         self._transaction = None
 
     def _create_request(self):
-        return trino.client.TrinoRequest(
+        # Creating session here because aiohttp requires it to be created inside the event loop. 
+        # The Connection only calls this from async functions so therefore it will be in event loop
+        if self._http_session is None:
+            self._http_session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(verify_ssl=self._verify_ssl)
+            )  # type: ignore
+
+        return aiotrino.client.TrinoRequest(
             self.host,
             self.port,
             self.user,
@@ -196,7 +188,7 @@ class Cursor(object):
 
     """
 
-    def __init__(self, connection: Connection, request: trino.client.TrinoRequest):
+    def __init__(self, connection: Connection, request: aiotrino.client.TrinoRequest):
         if not isinstance(connection, Connection):
             raise ValueError(
                 "connection must be a Connection object: {}".format(type(connection))
@@ -208,7 +200,7 @@ class Cursor(object):
         self._iterator = None
         self._query = None
 
-    async def __aiter__(self):
+    def __aiter__(self):
         return self._iterator
 
     @property
@@ -250,10 +242,10 @@ class Cursor(object):
         return None
 
     def setinputsizes(self, sizes):
-        raise trino.exceptions.NotSupportedError
+        raise aiotrino.exceptions.NotSupportedError
 
     def setoutputsize(self, size, column):
-        raise trino.exceptions.NotSupportedError
+        raise aiotrino.exceptions.NotSupportedError
 
     async def _prepare_statement(self, operation, statement_name):
         """
@@ -264,7 +256,7 @@ class Cursor(object):
         :param statement_name: name that will be assigned to the prepare
             statement.
 
-        :raises trino.exceptions.FailedToObtainAddedPrepareHeader: Error raised
+        :raises aiotrino.exceptions.FailedToObtainAddedPrepareHeader: Error raised
             when unable to find the 'X-Trino-Added-Prepare' for the PREPARE
             statement request.
 
@@ -278,7 +270,7 @@ class Cursor(object):
 
         # Send prepare statement. Copy the _request object to avoid poluting the
         # one that is going to be used to execute the actual operation.
-        query = trino.client.TrinoQuery(self._request.clone(), sql=sql)
+        query = aiotrino.client.TrinoQuery(self._request.clone(), sql=sql)
         result = await query.execute()
 
         # Iterate until the 'X-Trino-Added-Prepare' header is found or
@@ -289,7 +281,7 @@ class Cursor(object):
             if constants.HEADERS.ADDED_PREPARE in response_headers:
                 return response_headers[constants.HEADERS.ADDED_PREPARE]
 
-        raise trino.exceptions.FailedToObtainAddedPrepareHeader
+        raise aiotrino.exceptions.FailedToObtainAddedPrepareHeader
 
     def _get_added_prepare_statement_trino_query(
         self,
@@ -300,7 +292,7 @@ class Cursor(object):
 
         # No need to deepcopy _request here because this is the actual request
         # operation
-        return trino.client.TrinoQuery(self._request, sql=sql)
+        return aiotrino.client.TrinoQuery(self._request, sql=sql)
 
     def _format_prepared_param(self, param):
         """
@@ -352,14 +344,14 @@ class Cursor(object):
         if isinstance(param, uuid.UUID):
             return "UUID '%s'" % param
 
-        raise trino.exceptions.NotSupportedError("Query parameter of type '%s' is not supported." % type(param))
+        raise aiotrino.exceptions.NotSupportedError("Query parameter of type '%s' is not supported." % type(param))
 
     async def _deallocate_prepare_statement(self, added_prepare_header, statement_name):
         sql = 'DEALLOCATE PREPARE ' + statement_name
 
         # Send deallocate statement. Copy the _request object to avoid poluting the
         # one that is going to be used to execute the actual operation.
-        query = trino.client.TrinoQuery(self._request.clone(), sql=sql)
+        query = aiotrino.client.TrinoQuery(self._request.clone(), sql=sql)
         result = await query.execute(
             additional_http_headers={
                 constants.HEADERS.PREPARED_STATEMENT: added_prepare_header
@@ -374,7 +366,7 @@ class Cursor(object):
             if constants.HEADERS.DEALLOCATED_PREPARE in response_headers:
                 return response_headers[constants.HEADERS.DEALLOCATED_PREPARE]
 
-        raise trino.exceptions.FailedToObtainDeallocatedPrepareHeader
+        raise aiotrino.exceptions.FailedToObtainDeallocatedPrepareHeader
 
     def _generate_unique_statement_name(self):
         return 'st_' + uuid.uuid4().hex.replace('-', '')
@@ -410,13 +402,13 @@ class Cursor(object):
                 await self._deallocate_prepare_statement(added_prepare_header, statement_name)
 
         else:
-            self._query = trino.client.TrinoQuery(self._request, sql=operation)
+            self._query = aiotrino.client.TrinoQuery(self._request, sql=operation)
             result = await self._query.execute()
         self._iterator = aiter(result)
         return result
 
     def executemany(self, operation, seq_of_params):
-        raise trino.exceptions.NotSupportedError
+        raise aiotrino.exceptions.NotSupportedError
 
     async def fetchone(self):
         # type: () -> Optional[List[Any]]
@@ -431,10 +423,10 @@ class Cursor(object):
 
         try:
             return await anext(self._iterator)
-        except StopIteration:
+        except StopAsyncIteration:
             return None
-        except trino.exceptions.HttpError as err:
-            raise trino.exceptions.OperationalError(str(err))
+        except aiotrino.exceptions.HttpError as err:
+            raise aiotrino.exceptions.OperationalError(str(err))
 
     async def fetchmany(self, size=None):
         # type: (Optional[int]) -> List[List[Any]]
@@ -479,7 +471,7 @@ class Cursor(object):
 
     async def cancel(self):
         if self._query is None:
-            raise trino.exceptions.OperationalError(
+            raise aiotrino.exceptions.OperationalError(
                 "Cancel query failed; no running query"
             )
         await self._query.cancel()

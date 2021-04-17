@@ -21,12 +21,12 @@ from aiohttp.test_utils import TestClient
 from aioresponses.core import RequestMatch
 from yarl import URL
 
-import trino.exceptions
+import aiotrino.exceptions
 # from requests_kerberos.exceptions import KerberosExchangeError
-from trino import constants
-# from trino.auth import KerberosAuthentication
-# from trino.client import PROXIES, TrinoQuery, TrinoRequest, TrinoResult
-from trino.client import TrinoQuery, TrinoRequest, TrinoResult
+from aiotrino import constants
+# from aiotrino.auth import KerberosAuthentication
+# from aiotrino.client import PROXIES, TrinoQuery, TrinoRequest, TrinoResult
+from aiotrino.client import TrinoQuery, TrinoRequest, TrinoResult
 
 MOCK_URL = URL('http://mock')
 
@@ -36,14 +36,14 @@ Trino session. It is deliberately not truncated to document such response
 and allow to use it for other tests.
 To get some HTTP response, set logging level to DEBUG with
 ``logging.basicConfig(level=logging.DEBUG)`` or
-``trino.client.logger.setLevel(logging.DEBUG)``.
+``aiotrino.client.logger.setLevel(logging.DEBUG)``.
 
 ::
-    from trino import dbapi
+    from aiotrino import dbapi
 
     >>> import logging
-    >>> import trino.client
-    >>> trino.client.logger.setLevel(logging.DEBUG)
+    >>> import aiotrino.client
+    >>> aiotrino.client.logger.setLevel(logging.DEBUG)
     >>> conn = dbapi.Connection('localhost', 8080, 'ggreg', 'test')
     >>> cur = conn.cursor()
     >>> res = cur.execute('select * from system.runtime.nodes')
@@ -305,15 +305,15 @@ async def test_request_headers(monkeypatch):
     source = "test_source"
     accept_encoding_header = "accept-encoding"
     accept_encoding_value = "identity,deflate,gzip"
-    client_info_header = constants.HEADER_CLIENT_INFO
+    client_info_header = constants.HEADERS.CLIENT_INFO
     client_info_value = "some_client_info"
 
     def assert_headers(headers):
-        assert headers[constants.HEADER_CATALOG] == catalog
-        assert headers[constants.HEADER_SCHEMA] == schema
-        assert headers[constants.HEADER_SOURCE] == source
-        assert headers[constants.HEADER_USER] == user
-        assert headers[constants.HEADER_SESSION] == ""
+        assert headers[constants.HEADERS.CATALOG] == catalog
+        assert headers[constants.HEADERS.SCHEMA] == schema
+        assert headers[constants.HEADERS.SOURCE] == source
+        assert headers[constants.HEADERS.USER] == user
+        assert headers[constants.HEADERS.SESSION] == ""
         assert headers[accept_encoding_header] == accept_encoding_value
         assert headers[client_info_header] == client_info_value
         assert len(headers.keys()) == 8
@@ -382,7 +382,7 @@ async def test_request_invalid_http_headers():
             host="coordinator",
             port=8080,
             user="test",
-            http_headers={constants.HEADER_USER: "invalid_header"},
+            http_headers={constants.HEADERS.USER: "invalid_header"},
         ):
             pass
     assert str(value_error.value).startswith("cannot override reserved HTTP header")
@@ -466,7 +466,7 @@ async def test_trino_fetch_error():
 
         http_resp = await response_builder.build_response(MOCK_URL)
         http_resp.status = 200
-        with pytest.raises(trino.exceptions.TrinoUserError) as exception_info:
+        with pytest.raises(aiotrino.exceptions.TrinoUserError) as exception_info:
             await req.process(http_resp)
         error = exception_info.value
         assert error.error_code == 1
@@ -488,8 +488,8 @@ async def test_trino_fetch_error():
 @pytest.mark.parametrize(
     "error_code, error_type, error_message",
     [
-        (503, trino.exceptions.Http503Error, "service unavailable"),
-        (404, trino.exceptions.HttpError, "error 404"),
+        (503, aiotrino.exceptions.Http503Error, "service unavailable"),
+        (404, aiotrino.exceptions.HttpError, "error 404"),
     ],
 )
 async def test_trino_connection_error(error_code, error_type, error_message):
@@ -682,7 +682,7 @@ async def test_trino_query_response_headers(aiohttp_client):
 
         sql = 'execute my_stament using 1, 2, 3'
         additional_headers = {
-            constants.HEADER_PREPARED_STATEMENT: 'my_statement=added_prepare_statement_header'
+            constants.HEADERS.PREPARED_STATEMENT: 'my_statement=added_prepare_statement_header'
         }
 
         query = TrinoQuery(

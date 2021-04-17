@@ -14,18 +14,19 @@ from datetime import datetime
 
 import pytest
 import pytz
-import trino
-from trino.exceptions import TrinoQueryError
-from trino.transaction import IsolationLevel
+# Need to specify the fixture for it to load properly
+from fixtures import TRINO_VERSION, run_trino
 
-import fixtures
+import aiotrino
+from aiotrino.exceptions import TrinoQueryError
+from aiotrino.transaction import IsolationLevel
 
 
 @pytest.fixture
 def trino_connection(run_trino):
     _, host, port = run_trino
 
-    yield trino.dbapi.Connection(
+    yield aiotrino.dbapi.Connection(
         host=host, port=port, user="test", source="test", max_attempts=1
     )
 
@@ -34,7 +35,7 @@ def trino_connection(run_trino):
 def trino_connection_with_transaction(run_trino):
     _, host, port = run_trino
 
-    yield trino.dbapi.Connection(
+    yield aiotrino.dbapi.Connection(
         host=host,
         port=port,
         user="test",
@@ -45,13 +46,13 @@ def trino_connection_with_transaction(run_trino):
 
 
 @pytest.mark.asyncio
-async def test_select_query(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_select_query(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute("select * from system.runtime.nodes")
     rows = await cur.fetchall()
     assert len(rows) > 0
     row = rows[0]
-    assert row[2] == fixtures.TRINO_VERSION
+    assert row[2] == TRINO_VERSION
     columns = dict([desc[:2] for desc in cur.description])
     assert columns["node_id"] == "varchar"
     assert columns["http_uri"] == "varchar"
@@ -61,12 +62,12 @@ async def test_select_query(trino_connection: trino.dbapi.Connection):
 
 
 @pytest.mark.asyncio
-async def test_select_query_result_iteration(trino_connection: trino.dbapi.Connection):
-    cur0 = trino_connection.cursor()
+async def test_select_query_result_iteration(trino_connection: aiotrino.dbapi.Connection):
+    cur0 = await trino_connection.cursor()
     await cur0.execute("select custkey from tpch.sf1.customer LIMIT 10")
-    rows0 = await cur0.genall()
+    rows0 = [row async for row in cur0.genall()]
 
-    cur1 = trino_connection.cursor()
+    cur1 = await trino_connection.cursor()
     await cur1.execute("select custkey from tpch.sf1.customer LIMIT 10")
     rows1 = await cur1.fetchall()
 
@@ -74,8 +75,8 @@ async def test_select_query_result_iteration(trino_connection: trino.dbapi.Conne
 
 
 @pytest.mark.asyncio
-async def test_select_query_result_iteration_statement_params(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_select_query_result_iteration_statement_params(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute(
         """
         select * from (
@@ -93,8 +94,8 @@ async def test_select_query_result_iteration_statement_params(trino_connection: 
 
 
 @pytest.mark.asyncio
-async def test_none_query_param(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_none_query_param(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute("SELECT ?", params=(None,))
     rows = await cur.fetchall()
 
@@ -102,8 +103,8 @@ async def test_none_query_param(trino_connection: trino.dbapi.Connection):
 
 
 @pytest.mark.asyncio
-async def test_string_query_param(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_string_query_param(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
 
     await cur.execute("SELECT ?", params=("six'",))
     rows = await cur.fetchall()
@@ -112,21 +113,21 @@ async def test_string_query_param(trino_connection: trino.dbapi.Connection):
 
 
 @pytest.mark.asyncio
-async def test_datetime_query_param(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_datetime_query_param(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
 
     await cur.execute(
-            "SELECT ?",
-            params=(datetime(2020, 1, 1, 0, 0, 0),)
-            )
+        "SELECT ?",
+        params=(datetime(2020, 1, 1, 0, 0, 0),)
+    )
     rows = await cur.fetchall()
 
     assert rows[0][0] == "2020-01-01 00:00:00.000"
 
     await cur.execute(
-            "SELECT ?",
-            params=(datetime(2020, 1, 1, 0, 0, 0, tzinfo=pytz.utc),)
-            )
+        "SELECT ?",
+        params=(datetime(2020, 1, 1, 0, 0, 0, tzinfo=pytz.utc),)
+    )
     rows = await cur.fetchall()
 
     assert rows[0][0] == "2020-01-01 00:00:00.000 UTC"
@@ -134,8 +135,8 @@ async def test_datetime_query_param(trino_connection: trino.dbapi.Connection):
 
 
 @pytest.mark.asyncio
-async def test_array_query_param(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_array_query_param(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
 
     await cur.execute("SELECT ?", params=([1, 2, 3],))
     rows = await cur.fetchall()
@@ -143,8 +144,9 @@ async def test_array_query_param(trino_connection: trino.dbapi.Connection):
     assert rows[0][0] == [1, 2, 3]
 
     await cur.execute(
-            "SELECT ?",
-            params=([[1, 2, 3], [4, 5, 6]],))
+        "SELECT ?",
+        params=([[1, 2, 3], [4, 5, 6]],)
+    )
     rows = await cur.fetchall()
 
     assert rows[0][0] == [[1, 2, 3], [4, 5, 6]]
@@ -156,8 +158,8 @@ async def test_array_query_param(trino_connection: trino.dbapi.Connection):
 
 
 @pytest.mark.asyncio
-async def test_dict_query_param(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_dict_query_param(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
 
     await cur.execute("SELECT ?", params=({"foo": "bar"},))
     rows = await cur.fetchall()
@@ -171,8 +173,8 @@ async def test_dict_query_param(trino_connection: trino.dbapi.Connection):
 
 
 @pytest.mark.asyncio
-async def test_boolean_query_param(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_boolean_query_param(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
 
     await cur.execute("SELECT ?", params=(True,))
     rows = await cur.fetchall()
@@ -186,8 +188,8 @@ async def test_boolean_query_param(trino_connection: trino.dbapi.Connection):
 
 
 @pytest.mark.asyncio
-async def test_float_query_param(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_float_query_param(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute("SELECT ?", params=(1.1,))
     rows = await cur.fetchall()
 
@@ -197,8 +199,8 @@ async def test_float_query_param(trino_connection: trino.dbapi.Connection):
 
 @pytest.mark.skip(reason="Nan currently not returning the correct python type for nan")
 @pytest.mark.asyncio
-async def test_float_nan_query_param(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_float_nan_query_param(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute("SELECT ?", params=(float("nan"),))
     rows = await cur.fetchall()
 
@@ -209,8 +211,8 @@ async def test_float_nan_query_param(trino_connection: trino.dbapi.Connection):
 
 @pytest.mark.skip(reason="Nan currently not returning the correct python type fon inf")
 @pytest.mark.asyncio
-async def test_float_inf_query_param(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_float_inf_query_param(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute("SELECT ?", params=(float("inf"),))
     rows = await cur.fetchall()
 
@@ -223,8 +225,8 @@ async def test_float_inf_query_param(trino_connection: trino.dbapi.Connection):
 
 
 @pytest.mark.asyncio
-async def test_int_query_param(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_int_query_param(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute("SELECT ?", params=(3,))
     rows = await cur.fetchall()
 
@@ -244,21 +246,21 @@ async def test_int_query_param(trino_connection: trino.dbapi.Connection):
     object,
 ])
 @pytest.mark.asyncio
-async def test_select_query_invalid_params(trino_connection: trino.dbapi.Connection, params):
-    cur = trino_connection.cursor()
+async def test_select_query_invalid_params(trino_connection: aiotrino.dbapi.Connection, params):
+    cur = await trino_connection.cursor()
     with pytest.raises(AssertionError):
         await cur.execute('select ?', params=params)
 
 
 @pytest.mark.asyncio
-async def test_select_cursor_iteration(trino_connection: trino.dbapi.Connection):
-    cur0 = trino_connection.cursor()
+async def test_select_cursor_iteration(trino_connection: aiotrino.dbapi.Connection):
+    cur0 = await trino_connection.cursor()
     await cur0.execute("select nationkey from tpch.sf1.nation")
     rows0 = []
-    for row in cur0:
+    async for row in cur0:
         rows0.append(row)
 
-    cur1 = trino_connection.cursor()
+    cur1 = await trino_connection.cursor()
     await cur1.execute("select nationkey from tpch.sf1.nation")
     rows1 = await cur1.fetchall()
 
@@ -267,16 +269,16 @@ async def test_select_cursor_iteration(trino_connection: trino.dbapi.Connection)
 
 
 @pytest.mark.asyncio
-async def test_select_query_no_result(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_select_query_no_result(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute("select * from system.runtime.nodes where false")
     rows = await cur.fetchall()
     assert len(rows) == 0
 
 
 @pytest.mark.asyncio
-async def test_select_query_stats(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_select_query_stats(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute("SELECT * FROM tpch.sf1.customer LIMIT 1000")
 
     query_id = cur.stats["queryId"]
@@ -303,29 +305,29 @@ async def test_select_query_stats(trino_connection: trino.dbapi.Connection):
 
 
 @pytest.mark.asyncio
-async def test_select_failed_query(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
-    with pytest.raises(trino.exceptions.TrinoUserError):
+async def test_select_failed_query(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
+    with pytest.raises(aiotrino.exceptions.TrinoUserError):
         await cur.execute("select * from catalog.schema.do_not_exist")
         await cur.fetchall()
 
 
 @pytest.mark.asyncio
-async def test_select_tpch_1000(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_select_tpch_1000(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute("SELECT * FROM tpch.sf1.customer LIMIT 1000")
     rows = await cur.fetchall()
     assert len(rows) == 1000
 
 
 @pytest.mark.asyncio
-async def test_cancel_query(trino_connection: trino.dbapi.Connection):
-    cur = trino_connection.cursor()
+async def test_cancel_query(trino_connection: aiotrino.dbapi.Connection):
+    cur = await trino_connection.cursor()
     await cur.execute("select * from tpch.sf1.customer")
     await cur.fetchone()  # TODO (https://github.com/trinodb/trino/issues/2683) test with and without .fetchone
     await cur.cancel()  # would raise an exception if cancel fails
 
-    cur = trino_connection.cursor()
+    cur = await trino_connection.cursor()
     with pytest.raises(Exception) as cancel_error:
         await cur.cancel()
     assert "Cancel query failed; no running query" in str(cancel_error.value)
@@ -335,7 +337,7 @@ async def test_cancel_query(trino_connection: trino.dbapi.Connection):
 async def test_session_properties(run_trino):
     _, host, port = run_trino
 
-    connection = trino.dbapi.Connection(
+    connection = aiotrino.dbapi.Connection(
         host=host,
         port=port,
         user="test",
@@ -343,7 +345,7 @@ async def test_session_properties(run_trino):
         session_properties={"query_max_run_time": "10m", "query_priority": "1"},
         max_attempts=1,
     )
-    cur = connection.cursor()
+    cur = await connection.cursor()
     await cur.execute("SHOW SESSION")
     rows = await cur.fetchall()
     assert len(rows) > 2
@@ -355,35 +357,35 @@ async def test_session_properties(run_trino):
 
 
 @pytest.mark.asyncio
-async def test_transaction_single(trino_connection_with_transaction: trino.dbapi.Connection):
+async def test_transaction_single(trino_connection_with_transaction: aiotrino.dbapi.Connection):
     connection = trino_connection_with_transaction
     for _ in range(3):
-        cur = connection.cursor()
+        cur = await connection.cursor()
         await cur.execute("SELECT * FROM tpch.sf1.customer LIMIT 1000")
         rows = await cur.fetchall()
-        connection.commit()
+        await connection.commit()
         assert len(rows) == 1000
 
 
 @pytest.mark.asyncio
-async def test_transaction_rollback(trino_connection_with_transaction: trino.dbapi.Connection):
+async def test_transaction_rollback(trino_connection_with_transaction: aiotrino.dbapi.Connection):
     connection = trino_connection_with_transaction
     for _ in range(3):
-        cur = connection.cursor()
+        cur = await connection.cursor()
         await cur.execute("SELECT * FROM tpch.sf1.customer LIMIT 1000")
         rows = await cur.fetchall()
-        connection.rollback()
+        await connection.rollback()
         assert len(rows) == 1000
 
 
 @pytest.mark.asyncio
-async def test_transaction_multiple(trino_connection_with_transaction: trino.dbapi.Connection):
+async def test_transaction_multiple(trino_connection_with_transaction: aiotrino.dbapi.Connection):
     async with trino_connection_with_transaction as connection:
-        cur1 = connection.cursor()
+        cur1 = await connection.cursor()
         await cur1.execute("SELECT * FROM tpch.sf1.customer LIMIT 1000")
         rows1 = await cur1.fetchall()
 
-        cur2 = connection.cursor()
+        cur2 = await connection.cursor()
         await cur2.execute("SELECT * FROM tpch.sf1.customer LIMIT 1000")
         rows2 = await cur2.fetchall()
 
@@ -392,11 +394,11 @@ async def test_transaction_multiple(trino_connection_with_transaction: trino.dba
 
 
 @pytest.mark.asyncio
-async def test_invalid_query_throws_correct_error(trino_connection: trino.dbapi.Connection):
+async def test_invalid_query_throws_correct_error(trino_connection: aiotrino.dbapi.Connection):
     """
     tests that an invalid query raises the correct exception
     """
-    cur = trino_connection.cursor()
+    cur = await trino_connection.cursor()
     with pytest.raises(TrinoQueryError):
         await cur.execute(
             """

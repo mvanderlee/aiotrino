@@ -10,11 +10,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import auth
-from . import dbapi
-from . import client
-from . import constants
-from . import exceptions
-from . import logging
+from . import auth, client, constants, dbapi, exceptions, logging
 
 __version__ = "0.304.0"

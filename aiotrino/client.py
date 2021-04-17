@@ -39,14 +39,14 @@ from typing import Any, Dict, List, Optional, Text, Tuple, Union  # NOQA for myp
 
 import aiohttp
 
-import trino.logging
-from trino import constants, exceptions
-from trino.transaction import NO_TRANSACTION
+import aiotrino.logging
+from aiotrino import constants, exceptions
+from aiotrino.transaction import NO_TRANSACTION
 
 __all__ = ["TrinoQuery", "TrinoRequest"]
 
 
-logger = trino.logging.get_logger(__name__)
+logger = aiotrino.logging.get_logger(__name__)
 
 
 MAX_ATTEMPTS = constants.DEFAULT_MAX_ATTEMPTS
@@ -208,7 +208,7 @@ class TrinoRequest(object):
         http_headers=None,  # type: Optional[Dict[Text, Text]]
         transaction_id=NO_TRANSACTION,  # type: Optional[Text]
         http_scheme=constants.HTTP,  # type: Text
-        auth=constants.DEFAULT_AUTH,  # type: Optional[trino.auth.Authentication]
+        auth=constants.DEFAULT_AUTH,  # type: Optional[aiotrino.auth.Authentication]
         redirect_handler=None,
         max_attempts=MAX_ATTEMPTS,  # type: int
         request_timeout=constants.DEFAULT_REQUEST_TIMEOUT,  # type: Union[float, Tuple[float, float]]
@@ -493,20 +493,22 @@ class TrinoResult(object):
         # type: () -> int
         return self._rownumber
 
-    async def __aiter__(self):
-        # Initial fetch from the first POST request
-        for row in self._rows:
-            self._rownumber += 1
-            yield row
-        self._rows = None
-
-        # Subsequent fetches from GET requests until next_uri is empty.
-        while not self._query.is_finished():
-            rows = await self._query.fetch()
-            for row in rows:
+    def __aiter__(self):
+        # Easier then manually implementing __anext__
+        async def gen():
+            # Initial fetch from the first POST request
+            for row in self._rows:
                 self._rownumber += 1
-                logger.debug("row %s", row)
                 yield row
+            self._rows = None
+            # Subsequent fetches from GET requests until next_uri is empty.
+            while not self._query.is_finished():
+                rows = await self._query.fetch()
+                for row in rows:
+                    self._rownumber += 1
+                    yield row
+
+        return gen()
 
     @property
     def response_headers(self):

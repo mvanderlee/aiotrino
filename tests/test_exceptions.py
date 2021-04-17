@@ -18,7 +18,7 @@ defined in pep-0249.
 
 import pytest
 
-from trino import exceptions
+from aiotrino import exceptions
 
 
 def test_delay_exponential_without_jitter():

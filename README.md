@@ -1,16 +1,15 @@
-[![Build Status](https://github.com/trinodb/trino-python-client/workflows/ci/badge.svg)](https://github.com/trinodb/trino-python-client/actions?query=workflow%3Aci+event%3Apush+branch%3Amaster)
+[![Build Status](https://github.com/mvanderlee/trino-python-client/workflows/ci/badge.svg)](https://github.com/mvanderlee/trino-python-client/actions?query=workflow%3Aci+event%3Apush+branch%3Apy3-async)
 [![Trino Slack](https://img.shields.io/static/v1?logo=slack&logoColor=959DA5&label=Slack&labelColor=333a41&message=join%20conversation&color=3AC358)](https://trino.io/slack.html)
 [![Presto: The Definitive Guide book download](https://img.shields.io/badge/Presto%3A%20The%20Definitive%20Guide-download-brightgreen)](https://www.starburstdata.com/oreilly-presto-guide-download/)
 
 # Introduction
 
-This package provides a client interface to query [Trino](https://trino.io/)
-a distributed SQL engine. It supports Python 2.7, 3.5, 3.6, and pypy.
-
+This package provides a asyncio client interface to query [Trino](https://trino.io/)
+a distributed SQL engine. It supports Python 3.6, 3.7, and pypy.
 # Installation
 
 ```
-$ pip install trino
+$ pip install aiotrino
 ```
 
 # Quick Start
@@ -18,8 +17,8 @@ $ pip install trino
 Use the DBAPI interface to query Trino:
 
 ```python
-import trino
-conn = trino.dbapi.connect(
+import aiotrino
+conn = aiotrino.dbapi.connect(
     host='localhost',
     port=8080,
     user='the-user',
@@ -28,13 +27,13 @@ conn = trino.dbapi.connect(
 )
 await cur = conn.cursor()
 await cur.execute('SELECT * FROM system.runtime.nodes')
-await rows = cur.fetchall()
+rows = await cur.fetchall()
 await conn.close()
 ```
 Or with context manager 
 ```python
-import trino
-async with trino.dbapi.connect(
+import aiotrino
+async with aiotrino.dbapi.connect(
     host='localhost',
     port=8080,
     user='the-user',
@@ -43,30 +42,36 @@ async with trino.dbapi.connect(
 ) as conn:
     await cur = conn.cursor()
     await cur.execute('SELECT * FROM system.runtime.nodes')
-    await rows = cur.fetchall()
+    rows = await cur.fetchall()
 ```
 
 This will query the `system.runtime.nodes` system tables that shows the nodes
 in the Trino cluster.
 
-The DBAPI implementation in `trino.dbapi` provides methods to retrieve fewer
+The DBAPI implementation in `aiotrino.dbapi` provides methods to retrieve fewer
 rows for example `Cursorfetchone()` or `Cursor.fetchmany()`. By default
 `Cursor.fetchmany()` fetches one row. Please set
 `trino.dbapi.Cursor.arraysize` accordingly.
+
+For backwards compatibility with PrestoSQL, override the headers at the start of your application
+```python
+import aiotrino
+aiotrino.constants.HEADERS = aiotrino.constants.PrestoHeaders
+```
 
 # Basic Authentication
 The `BasicAuthentication` class can be used to connect to a LDAP-configured Trino
 cluster:
 ```python
-import trino
-conn = trino.dbapi.connect(
+import aiotrino
+conn = aiotrino.dbapi.connect(
     host='coordinator url',
     port=8443,
     user='the-user',
     catalog='the-catalog',
     schema='the-schema',
     http_scheme='https',
-    auth=trino.auth.BasicAuthentication("principal id", "password"),
+    auth=aiotrino.auth.BasicAuthentication("principal id", "password"),
 )
 cur = await conn.cursor()
 await cur.execute('SELECT * FROM system.runtime.nodes')
@@ -79,9 +84,9 @@ The client runs by default in *autocommit* mode. To enable transactions, set
 *isolation_level* to a value different than `IsolationLevel.AUTOCOMMIT`:
 
 ```python
-import trino
-from trino import transaction
-async with trino.dbapi.connect(
+import aiotrino
+from aiotrino import transaction
+async with aiotrino.dbapi.connect(
     host='localhost',
     port=8080,
     user='the-user',
@@ -89,7 +94,7 @@ async with trino.dbapi.connect(
     schema='the-schema',
     isolation_level=transaction.IsolationLevel.REPEATABLE_READ,
 ) as conn:
-  cur = awwait conn.cursor()
+  cur = await conn.cursor()
   await cur.execute('INSERT INTO sometable VALUES (1, 2, 3)')
   await cur.fetchone()
   await cur.execute('INSERT INTO sometable VALUES (4, 5, 6)')

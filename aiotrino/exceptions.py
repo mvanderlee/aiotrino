@@ -19,9 +19,9 @@ import asyncio
 import functools
 import random
 
-import trino.logging
+import aiotrino.logging
 
-logger = trino.logging.get_logger(__name__)
+logger = aiotrino.logging.get_logger(__name__)
 
 
 class HttpError(Exception):
