@@ -34,10 +34,15 @@ The main interface is :class:`TrinoQuery`: ::
 """
 
 import copy
+import functools
 import os
 from typing import Any, Dict, List, Optional, Text, Tuple, Union  # NOQA for mypy types
 
 import aiohttp
+from aiohttp.client_exceptions import ClientPayloadError
+from aiohttp.client_proto import ResponseHandler
+from aiohttp.helpers import BaseTimerContext
+from aiohttp.http import HttpResponseParser
 
 import aiotrino.logging
 from aiotrino import constants, exceptions
@@ -99,6 +104,51 @@ def get_session_property_values(headers, header):
 def is_redirect(http_response) -> bool:
     # type: (aiohttp.ClientResponse) -> bool
     return ('location' in http_response.headers and http_response.status in (301, 302, 303, 307, 308))
+
+
+# Set allowed header size to 1MB - https://github.com/trinodb/trino/issues/8797
+class TrinoResponseHandler(ResponseHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def set_response_params(
+        self,
+        *,
+        timer: Optional[BaseTimerContext] = None,
+        skip_payload: bool = False,
+        read_until_eof: bool = False,
+        auto_decompress: bool = True,
+        read_timeout: Optional[float] = None,
+        read_bufsize: int = 2 ** 16,
+    ) -> None:
+        self._skip_payload = skip_payload
+
+        self._read_timeout = read_timeout
+        self._reschedule_timeout()
+
+        self._parser = HttpResponseParser(
+            self,
+            self._loop,
+            read_bufsize,
+            timer=timer,
+            payload_exception=ClientPayloadError,
+            response_with_body=not skip_payload,
+            read_until_eof=read_until_eof,
+            auto_decompress=auto_decompress,
+            max_field_size=1_048_576,  # 1MB 
+        )
+
+        if self._tail:
+            data, self._tail = self._tail, b""
+            self.data_received(data)
+
+
+class TrinoTCPConnector(aiohttp.TCPConnector):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self._factory = functools.partial(TrinoResponseHandler, loop=self._loop)
+# End header size fix
 
 
 class TrinoStatus(object):
@@ -236,7 +286,7 @@ class TrinoRequest(object):
         else:
             # mypy cannot follow module import
             self._http_session = self.http.ClientSession(
-                connector=self.http.TCPConnector(verify_ssl=verify)
+                connector=TrinoTCPConnector(verify_ssl=verify)
             )  # type: ignore
             self._close_session = True
         self._http_session.headers.update(self.http_headers)

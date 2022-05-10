@@ -26,6 +26,8 @@ with open("aiotrino/__init__.py", "rb") as f:
         ast.literal_eval(_version_re.search(f.read().decode("utf-8")).group(1))
     )
 
+with open('README.md') as f:
+    README = f.read()
 
 kerberos_require = ["requests_kerberos"]
 
@@ -42,13 +44,8 @@ setup(
     packages=["aiotrino"],
     package_data={"": ["LICENSE", "README.md"]},
     description="ASyncIO Client for the Trino distributed SQL Engine",
-    long_description=textwrap.dedent(
-        """
-    ASyncIO Client for Trino (https://trino.io), a distributed SQL engine for
-    interactive and batch big data processing. Provides a low-level client and
-    a DBAPI 2.0 implementation.
-    """
-    ),
+    long_description=README,
+    long_description_content_type="text/markdown",
     license="Apache 2.0",
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -61,6 +58,7 @@ setup(
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.5",
         "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: Implementation :: CPython",
         "Programming Language :: Python :: Implementation :: PyPy",
         "Topic :: Database :: Front-Ends",

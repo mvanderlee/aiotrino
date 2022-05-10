@@ -148,7 +148,7 @@ class Connection(object):
         # The Connection only calls this from async functions so therefore it will be in event loop
         if self._http_session is None:
             self._http_session = aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(verify_ssl=self._verify_ssl)
+                connector=aiotrino.client.TrinoTCPConnector(verify_ssl=self._verify_ssl)
             )  # type: ignore
 
         return aiotrino.client.TrinoRequest(
