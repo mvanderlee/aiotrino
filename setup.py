@@ -40,7 +40,7 @@ setup(
     author="Michiel Van Der Lee, Trino Team",
     author_email="jmt.vanderlee@gmail.com",
     version=version,
-    url="https://github.com/mvanderlee/trino-python-client/tree/py3-async",
+    url="https://github.com/mvanderlee/aiotrino/tree/main",
     packages=["aiotrino"],
     package_data={"": ["LICENSE", "README.md"]},
     description="ASyncIO Client for the Trino distributed SQL Engine",
