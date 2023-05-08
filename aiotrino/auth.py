@@ -13,7 +13,8 @@
 import abc
 
 import aiohttp
-
+from typing import Tuple, Any
+# from requests.auth import AuthBase, extract_cookies_to_jar
 
 class Authentication(abc.ABC):  # type: ignore
     @abc.abstractmethod
@@ -121,3 +122,23 @@ class BasicAuthentication(Authentication):
 
     def handle_error(self, handle_error):
         pass
+    
+
+class JWTAuthentication(Authentication):
+
+    def __init__(self, token: str):
+        self.token = token
+
+    def setup(self, trino_client):
+        self.set_client_session(trino_client.client_session)
+        self.set_http_session(trino_client.http_session)
+
+    def set_http_session(self, http_session):
+        http_session.headers["Authorization"] = "Bearer " + self.token
+        return http_session
+    
+    def set_client_session(self, client_session):
+        pass
+
+    def get_exceptions(self) -> Tuple[Any, ...]:
+        return ()

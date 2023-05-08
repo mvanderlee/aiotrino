@@ -79,6 +79,24 @@ rows = await cur.fetchall()
 await conn.close()
 ```
 
+# JWT Token Authentication
+The `JWTAuthentication` class can be used to connect to a configured Trino cluster:
+```python
+import aiotrino
+conn = aiotrino.dbapi.connect(
+    host='coordinator url',
+    port=8443,
+    catalog='the-catalog',
+    schema='the-schema',
+    http_scheme='https',
+    auth=aiotrino.auth.JWTAuthentication(token="jwt-token"),
+)
+cur = await conn.cursor()
+await cur.execute('SELECT * FROM system.runtime.nodes')
+rows = await cur.fetchall()
+await conn.close()
+```
+
 # Transactions
 The client runs by default in *autocommit* mode. To enable transactions, set
 *isolation_level* to a value different than `IsolationLevel.AUTOCOMMIT`:
