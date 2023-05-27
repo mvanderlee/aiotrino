@@ -5,7 +5,7 @@
 # Introduction
 
 This package provides a asyncio client interface to query [Trino](https://trino.io/)
-a distributed SQL engine. It supports Python 3.6, 3.7, and pypy.
+a distributed SQL engine. It supports Python 3.7, 3.8, 3.9, 3.10, 3.11.
 # Installation
 
 ```
@@ -190,6 +190,47 @@ $ pytest integration_tests
 They pull a Docker image and then run a container with a Trino server:
 - the image is named `trinodb/trino:${TRINO_VERSION}`
 - the container is named `trino-python-client-tests-{uuid4()[:7]}`
+
+
+### Test setup
+
+Supported OS Ubuntu 22.04
+
+1. Install [pyenv](https://github.com/pyenv/pyenv#automatic-installer)
+
+    ```shell
+    curl https://pyenv.run | bash
+    ```
+
+2. Install required python versions
+
+    ```shell
+    # Install the latest of all supported versions
+    pyenv install 3.7, 3.8, 3.9, 3.10, 3.11
+    ```
+
+3. Set the installed versions as default for the shell. This allows `tox` to find them.
+
+    List installed versions and update the following command as needed.
+    ```shell
+    pyenv versions
+    ```
+
+    ```shell
+    pyenv shell 3.11.3 3.10.11 3.9.16 3.8.16 3.7.16
+    ```
+
+4. Install `tox`
+
+    ```shell
+    pip install tox
+    ```
+
+5. Run `tox`
+
+    ```shell
+    tox
+    ```
 
 ## Releasing
 
