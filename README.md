@@ -240,7 +240,7 @@ Supported OS Ubuntu 22.04
 - Run the following:
   ```bash
   . .venv/bin/activate &&
-  pip install twine &&
+  pip install twine wheel &&
   rm -rf dist/ &&
   ./setup.py sdist bdist_wheel &&
   twine upload dist/* &&
