@@ -235,7 +235,7 @@ Supported OS Ubuntu 22.04
 ## Releasing
 
 - [Set up your development environment](#Getting-Started-With-Development).
-- Change version in `trino/__init__.py`.
+- Change version in `aiotrino/__init__.py`.
 - Commit and create an annotated tag (`git tag -m '' current_version`)
 - Run the following:
   ```bash
@@ -244,7 +244,7 @@ Supported OS Ubuntu 22.04
   rm -rf dist/ &&
   ./setup.py sdist bdist_wheel &&
   twine upload dist/* &&
-  open https://pypi.org/project/trino/ &&
+  open https://pypi.org/project/aiotrino/ &&
   echo "Released!"
   ```
 - Push the branch and the tag (`git push upstream master current_version`)
