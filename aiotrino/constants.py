@@ -13,7 +13,7 @@
 from typing import Any, Optional, Text  # NOQA: mypy types
 
 DEFAULT_PORT = 8080
-DEFAULT_SOURCE = "trino-python-client"
+DEFAULT_SOURCE = "aiotrino-python-client"
 DEFAULT_CATALOG = None  # type: Optional[Text]
 DEFAULT_SCHEMA = None  # type: Optional[Text]
 DEFAULT_AUTH = None  # type: Optional[Any]

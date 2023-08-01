@@ -280,6 +280,11 @@ class Cursor(object):
 
             if constants.HEADERS.ADDED_PREPARE in response_headers:
                 return response_headers[constants.HEADERS.ADDED_PREPARE]
+        else:
+            # 406 no longer returns results so there is nothing to loop over.
+            response_headers = result.response_headers
+            if constants.HEADERS.ADDED_PREPARE in response_headers:
+                return response_headers[constants.HEADERS.ADDED_PREPARE]
 
         raise aiotrino.exceptions.FailedToObtainAddedPrepareHeader
 
@@ -363,6 +368,11 @@ class Cursor(object):
         async for _ in result:
             response_headers = result.response_headers
 
+            if constants.HEADERS.DEALLOCATED_PREPARE in response_headers:
+                return response_headers[constants.HEADERS.DEALLOCATED_PREPARE]
+        else:
+            # 406 no longer returns results so there is nothing to loop over.
+            response_headers = result.response_headers
             if constants.HEADERS.DEALLOCATED_PREPARE in response_headers:
                 return response_headers[constants.HEADERS.DEALLOCATED_PREPARE]
 

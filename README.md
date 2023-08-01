@@ -1,4 +1,4 @@
-[![Build Status](https://github.com/mvanderlee/trino-python-client/workflows/ci/badge.svg)](https://github.com/mvanderlee/trino-python-client/actions?query=workflow%3Aci+event%3Apush+branch%3Apy3-async)
+[![Build Status](https://github.com/mvanderlee/aiotrino/workflows/ci/badge.svg)](https://github.com/mvanderlee/aiotrino/actions?query=workflow%3Aci+event%3Apush+branch%3Apy3-async)
 [![Trino Slack](https://img.shields.io/static/v1?logo=slack&logoColor=959DA5&label=Slack&labelColor=333a41&message=join%20conversation&color=3AC358)](https://trino.io/slack.html)
 [![Presto: The Definitive Guide book download](https://img.shields.io/badge/Presto%3A%20The%20Definitive%20Guide-download-brightgreen)](https://www.starburstdata.com/oreilly-presto-guide-download/)
 
@@ -25,7 +25,7 @@ conn = aiotrino.dbapi.connect(
     catalog='the-catalog',
     schema='the-schema',
 )
-await cur = conn.cursor()
+cur = await conn.cursor()
 await cur.execute('SELECT * FROM system.runtime.nodes')
 rows = await cur.fetchall()
 await conn.close()
@@ -40,7 +40,7 @@ async with aiotrino.dbapi.connect(
     catalog='the-catalog',
     schema='the-schema',
 ) as conn:
-    await cur = conn.cursor()
+    cur = await conn.cursor()
     await cur.execute('SELECT * FROM system.runtime.nodes')
     rows = await cur.fetchall()
 ```
@@ -165,7 +165,7 @@ When the code is ready, submit a Pull Request.
 There is a helper scripts, `run`, that provides commands to run tests.
 Type `./run tests` to run both unit and integration tests.
 
-`trino-python-client` uses [pytest](https://pytest.org/) for its tests. To run
+`aiotrino` uses [pytest](https://pytest.org/) for its tests. To run
 only unit tests, type:
 
 ```
@@ -189,7 +189,7 @@ $ pytest integration_tests
 
 They pull a Docker image and then run a container with a Trino server:
 - the image is named `trinodb/trino:${TRINO_VERSION}`
-- the container is named `trino-python-client-tests-{uuid4()[:7]}`
+- the container is named `aiotrino-python-client-tests-{uuid4()[:7]}`
 
 
 ### Test setup

@@ -29,7 +29,7 @@ from aiotrino.exceptions import TimeoutError
 logger = aiotrino.logging.get_logger(__name__)
 
 
-TRINO_VERSION = os.environ.get("TRINO_VERSION") or "351"
+TRINO_VERSION = os.environ.get("TRINO_VERSION") or "414"
 TRINO_HOST = "127.0.0.1"
 TRINO_PORT = 8080
 
@@ -56,7 +56,7 @@ def start_trino(image_tag=None):
     if not image_tag:
         image_tag = get_default_trino_image_tag()
 
-    container_id = "trino-python-client-tests-" + uuid4().hex[:7]
+    container_id = "aiotrino-python-client-tests-" + uuid4().hex[:7]
     local_port = get_local_port()
     logger.info("starting Docker container")
     docker_run = [
@@ -199,7 +199,7 @@ def trino_cli(container_id=None):
 @cli.command("list")
 def list_():
     subprocess.check_call(
-        ["docker", "ps", "--filter", "name=trino-python-client-tests-"]
+        ["docker", "ps", "--filter", "name=aiotrino-python-client-tests-"]
     )
 
 
@@ -207,7 +207,7 @@ def list_():
 def clean():
     cmd = (
         "docker ps "
-        "--filter name=trino-python-client-tests- "
+        "--filter name=aiotrino-python-client-tests- "
         "--format={{.Names}} | "
         "xargs -n 1 docker kill"  # NOQA deliberate additional indent
     )
