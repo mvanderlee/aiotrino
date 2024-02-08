@@ -120,11 +120,16 @@ class TrinoResponseHandler(ResponseHandler):
         auto_decompress: bool = True,
         read_timeout: Optional[float] = None,
         read_bufsize: int = 2 ** 16,
+        timeout_ceil_threshold: float = 5,
+        max_line_size: int = 8190,
+        max_field_size: int = 1_048_576,  # 1MB
+        **kwargs
     ) -> None:
         self._skip_payload = skip_payload
 
         self._read_timeout = read_timeout
-        self._reschedule_timeout()
+
+        self._timeout_ceil_threshold = timeout_ceil_threshold
 
         self._parser = HttpResponseParser(
             self,
@@ -135,7 +140,8 @@ class TrinoResponseHandler(ResponseHandler):
             response_with_body=not skip_payload,
             read_until_eof=read_until_eof,
             auto_decompress=auto_decompress,
-            max_field_size=1_048_576,  # 1MB 
+            max_line_size=max_line_size,
+            max_field_size=max_field_size,
         )
 
         if self._tail:
