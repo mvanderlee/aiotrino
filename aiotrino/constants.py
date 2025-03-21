@@ -10,15 +10,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Optional, Text  # NOQA: mypy types
+from typing import Any, Optional
 
 DEFAULT_PORT = 8080
+DEFAULT_TLS_PORT = 443
 DEFAULT_SOURCE = "aiotrino-python-client"
-DEFAULT_CATALOG = None  # type: Optional[Text]
-DEFAULT_SCHEMA = None  # type: Optional[Text]
-DEFAULT_AUTH = None  # type: Optional[Any]
+DEFAULT_CATALOG: Optional[str] = None
+DEFAULT_SCHEMA: Optional[str] = None
+DEFAULT_AUTH: Optional[Any] = None
 DEFAULT_MAX_ATTEMPTS = 3
-DEFAULT_REQUEST_TIMEOUT = 30.0  # type: float
+DEFAULT_REQUEST_TIMEOUT: float = 30.0
+MAX_NT_PASSWORD_SIZE: int = 1280
 
 HTTP = "http"
 HTTPS = "https"
@@ -26,42 +28,41 @@ HTTPS = "https"
 URL_STATEMENT_PATH = "/v1/statement"
 
 
-class TrinoHeaders:
-    CATALOG = "X-Trino-Catalog"
-    SCHEMA = "X-Trino-Schema"
-    SOURCE = "X-Trino-Source"
-    USER = "X-Trino-User"
-    CLIENT_INFO = "X-Trino-Client-Info"
+CLIENT_NAME = "AIOTrino Python Client"
 
-    SESSION = "X-Trino-Session"
-    SET_SESSION = "X-Trino-Set-Session"
-    CLEAR_SESSION = "X-Trino-Clear-Session"
+HEADER_CATALOG = "X-Trino-Catalog"
+HEADER_SCHEMA = "X-Trino-Schema"
+HEADER_SOURCE = "X-Trino-Source"
+HEADER_USER = "X-Trino-User"
+HEADER_CLIENT_INFO = "X-Trino-Client-Info"
+HEADER_CLIENT_TAGS = "X-Trino-Client-Tags"
+HEADER_EXTRA_CREDENTIAL = "X-Trino-Extra-Credential"
+HEADER_TIMEZONE = "X-Trino-Time-Zone"
+HEADER_ENCODING = "X-Trino-Query-Data-Encoding"
 
-    STARTED_TRANSACTION = "X-Trino-Started-Transaction-Id"
-    TRANSACTION = "X-Trino-Transaction-Id"
+HEADER_SESSION = "X-Trino-Session"
+HEADER_SET_SESSION = "X-Trino-Set-Session"
+HEADER_CLEAR_SESSION = "X-Trino-Clear-Session"
 
-    PREPARED_STATEMENT = 'X-Trino-Prepared-Statement'
-    ADDED_PREPARE = 'X-Trino-Added-Prepare'
-    DEALLOCATED_PREPARE = 'X-Trino-Deallocated-Prepare'
+HEADER_ROLE = "X-Trino-Role"
+HEADER_SET_ROLE = "X-Trino-Set-Role"
 
+HEADER_STARTED_TRANSACTION = "X-Trino-Started-Transaction-Id"
+HEADER_TRANSACTION = "X-Trino-Transaction-Id"
 
-class PrestoHeaders:
-    CATALOG = "X-Presto-Catalog"
-    SCHEMA = "X-Presto-Schema"
-    SOURCE = "X-Presto-Source"
-    USER = "X-Presto-User"
-    CLIENT_INFO = "X-Presto-Client-Info"
+HEADER_PREPARED_STATEMENT = "X-Trino-Prepared-Statement"
+HEADER_ADDED_PREPARE = "X-Trino-Added-Prepare"
+HEADER_DEALLOCATED_PREPARE = "X-Trino-Deallocated-Prepare"
 
-    SESSION = "X-Presto-Session"
-    SET_SESSION = "X-Presto-Set-Session"
-    CLEAR_SESSION = "X-Presto-Clear-Session"
+HEADER_SET_SCHEMA = "X-Trino-Set-Schema"
+HEADER_SET_CATALOG = "X-Trino-Set-Catalog"
 
-    STARTED_TRANSACTION = "X-Presto-Started-Transaction-Id"
-    TRANSACTION = "X-Presto-Transaction-Id"
+HEADER_CLIENT_CAPABILITIES = "X-Trino-Client-Capabilities"
 
-    PREPARED_STATEMENT = 'X-Presto-Prepared-Statement'
-    ADDED_PREPARE = 'X-Presto-Added-Prepare'
-    DEALLOCATED_PREPARE = 'X-Presto-Deallocated-Prepare'
+HEADER_AUTHORIZATION_USER = "X-Trino-Authorization-User"
+HEADER_SET_AUTHORIZATION_USER = "X-Trino-Set-Authorization-User"
+HEADER_RESET_AUTHORIZATION_USER = "X-Trino-Reset-Authorization-User"
 
-
-HEADERS = TrinoHeaders
+LENGTH_TYPES = ["char", "varchar"]
+PRECISION_TYPES = ["time", "time with time zone", "timestamp", "timestamp with time zone", "decimal"]
+SCALE_TYPES = ["decimal"]

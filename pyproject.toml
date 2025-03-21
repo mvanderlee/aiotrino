@@ -1,0 +1,31 @@
+
+[tool.isort]
+profile = "hug"
+line_length = 100
+
+[tool.ruff]
+select = [
+  "E",  # pycodestyle errors
+  "W",  # pycodestyle warnings
+  "F",  # pyflakes
+  # "I",  # isort
+  "C",  # flake8-comprehensions
+  "B",  # flake8-bugbear
+]
+ignore = [
+  "B008",  # do not perform function calls in argument defaults
+  "B028",  # No explicit stacklevel argument found.
+  "C901",  # too complex
+]
+line-length = 130  # Enforce 130. But ~100 is recommended.
+
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+"migrations/env.py" = ["E402"]
+
+[tool.pytest.ini_options]
+# https://pytest-asyncio.readthedocs.io/en/latest/reference/configuration.html
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+

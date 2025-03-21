@@ -9,18 +9,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from sqlalchemy.dialects import registry
 
-from aiotrino import constants
-from aiotrino.client import get_header_values, get_session_property_values
+from .util import _url as URL  # noqa
 
-
-def test_get_header_values():
-    headers = {constants.HEADERS.SET_SESSION: "a, b"}
-    values = get_header_values(headers, constants.HEADERS.SET_SESSION)
-    assert values == ["a", "b"]
-
-
-def test_get_session_property_values():
-    headers = {constants.HEADERS.SET_SESSION: "a=1, b=2"}
-    values = get_session_property_values(headers, constants.HEADERS.SET_SESSION)
-    assert values == [("a", "1"), ("b", "2")]
+registry.register("aiotrino", "aiotrino.sqlalchemy.dialect", "AIOTrinoDialect")
