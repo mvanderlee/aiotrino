@@ -5,7 +5,7 @@
 # Introduction
 
 This package provides a asyncio client interface to query [Trino](https://trino.io/)
-a distributed SQL engine. It supports Python 3.7, 3.8, 3.9, 3.10, 3.11, 3.12.
+a distributed SQL engine. It supports Python 3.9, 3.10, 3.11, 3.12, 3.13.
 # Installation
 
 ```
@@ -206,7 +206,7 @@ Supported OS Ubuntu 22.04
 
     ```shell
     # Install the latest of all supported versions
-    pyenv install 3.7, 3.8, 3.9, 3.10, 3.11, 3.12
+    pyenv install 3.9, 3.10, 3.11, 3.12, 3.13
     ```
 
 3. Set the installed versions as default for the shell. This allows `tox` to find them.
@@ -217,7 +217,7 @@ Supported OS Ubuntu 22.04
     ```
 
     ```shell
-    pyenv shell 3.12.1 3.11.3 3.10.11 3.9.16 3.8.16 3.7.16
+    pyenv shell 3.13.2 3.12.9 3.11.11 3.10.16 3.9.21
     ```
 
 4. Install `tox`

@@ -1,5 +1,12 @@
 {
-  "python.pythonPath": "c:\\Users\\maste\\.pyenv\\pyenv-win\\versions\\3.7.7\\python.exe",
+  "[python]": {
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "explicit",
+      "source.organizeImports": "explicit"
+    },
+    // "editor.formatOnType": true,
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  },
   "python.testing.pytestArgs": [
     "-W",
     "ignore",

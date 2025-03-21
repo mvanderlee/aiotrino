@@ -17,22 +17,61 @@ https://www.python.org/dev/peps/pep-0249/ .
 Fetch methods returns rows as a list of lists on purpose to let the caller
 decide to convert then to a list of tuples.
 """
+from __future__ import annotations
 
 import datetime
 import math
 import uuid
-from typing import Any, List, Optional  # NOQA for mypy types
+from collections import OrderedDict
+from decimal import Decimal
+from threading import Lock
+from time import time
+from typing import Any, NamedTuple, Optional, Union
+from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import aiohttp
+from aioitertools import islice as aio_islice
 
 import aiotrino.client
 import aiotrino.exceptions
 import aiotrino.logging
 from aiotrino import constants
+from aiotrino.exceptions import (
+    DatabaseError,
+    DataError,
+    Error,
+    IntegrityError,
+    InterfaceError,
+    InternalError,
+    NotSupportedError,
+    OperationalError,
+    ProgrammingError,
+    Warning,
+)
 from aiotrino.transaction import NO_TRANSACTION, IsolationLevel, Transaction
 from aiotrino.utils import aiter, anext
 
-__all__ = ["connect", "Connection", "Cursor"]
+__all__ = [
+    # https://www.python.org/dev/peps/pep-0249/#globals
+    "apilevel",
+    "threadsafety",
+    "paramstyle",
+    "connect",
+    "Connection",
+    "Cursor",
+    # https://www.python.org/dev/peps/pep-0249/#exceptions
+    "Warning",
+    "Error",
+    "InterfaceError",
+    "DatabaseError",
+    "DataError",
+    "OperationalError",
+    "IntegrityError",
+    "InternalError",
+    "ProgrammingError",
+    "NotSupportedError",
+]
 
 
 apilevel = "2.0"
@@ -40,6 +79,42 @@ threadsafety = 2
 paramstyle = "qmark"
 
 logger = aiotrino.logging.get_logger(__name__)
+
+
+class TimeBoundLRUCache:
+    """A bounded LRU cache which expires entries after a configured number of seconds.
+    Note that expired entries will be evicted only on an attempted access (or through
+    the LRU policy)."""
+
+    def __init__(self, capacity: int, ttl_seconds: int):
+        self.capacity = capacity
+        self.ttl_seconds = ttl_seconds
+        self.cache = OrderedDict()
+        self.lock = Lock()
+
+    def get(self, key):
+        with self.lock:
+            if key not in self.cache:
+                return None
+            value, timestamp = self.cache[key]
+            if time() - timestamp > self.ttl_seconds:
+                self.cache.pop(key)
+                return None
+            self.cache.move_to_end(key)
+            return value
+
+    def put(self, key, value):
+        with self.lock:
+            self.cache[key] = value, time()
+            self.cache.move_to_end(key)
+            if len(self.cache) > self.capacity:
+                self.cache.popitem(last=False)
+
+    def __repr__(self):
+        return f"LRUCache(capacity: {self.capacity}, ttl: {self.ttl_seconds} seconds, {self.cache})"
+
+
+must_use_legacy_prepared_statements = TimeBoundLRUCache(1024, 3600)
 
 
 def connect(*args, **kwargs):
@@ -52,6 +127,9 @@ def connect(*args, **kwargs):
     return Connection(*args, **kwargs)
 
 
+_USE_DEFAULT_ENCODING = object()
+
+
 class Connection(object):
     """Trino supports transactions and the ability to either commit or rollback
     a sequence of SQL statements. A single query i.e. the execution of a SQL
@@ -62,49 +140,88 @@ class Connection(object):
 
     def __init__(
         self,
-        host,
-        port=constants.DEFAULT_PORT,
-        user=None,
-        source=constants.DEFAULT_SOURCE,
-        catalog=constants.DEFAULT_CATALOG,
-        schema=constants.DEFAULT_SCHEMA,
-        session_properties=None,
-        http_headers=None,
-        http_scheme=constants.HTTP,
-        auth=constants.DEFAULT_AUTH,
-        redirect_handler=None,
-        max_attempts=constants.DEFAULT_MAX_ATTEMPTS,
-        request_timeout=constants.DEFAULT_REQUEST_TIMEOUT,
-        isolation_level=IsolationLevel.AUTOCOMMIT,
-        verify=True
+        host: str,
+        port: int = constants.DEFAULT_PORT,
+        user: Optional[str] = None,
+        source: str = constants.DEFAULT_SOURCE,
+        catalog: str = constants.DEFAULT_CATALOG,
+        schema: str = constants.DEFAULT_SCHEMA,
+        session_properties: Optional[dict[str, str]] = None,
+        http_headers: Optional[dict[str, str]] = None,
+        http_scheme: str = constants.HTTP,
+        auth: Optional[Any] = constants.DEFAULT_AUTH,
+        extra_credential: Optional[list[tuple[str, str]]] = None,
+        max_attempts: int = constants.DEFAULT_MAX_ATTEMPTS,
+        request_timeout: float = constants.DEFAULT_REQUEST_TIMEOUT,
+        isolation_level: IsolationLevel = IsolationLevel.AUTOCOMMIT,
+        verify: bool = True,
+        http_session: Optional[aiohttp.ClientSession] = None,
+        client_tags: Optional[list[str]] = None,
+        legacy_primitive_types: bool = False,
+        legacy_prepared_statements: Optional[Any] = None,
+        roles: Optional[Union[dict[str, str], str]] = None,
+        timezone: Optional[str] = None,
+        encoding: Union[str, list[str]] = _USE_DEFAULT_ENCODING,
     ):
-        self.host = host
-        self.port = port
+        # Automatically assign http_schema, port based on hostname
+        parsed_host = urlparse(host, allow_fragments=False)
+
+        if encoding is _USE_DEFAULT_ENCODING:
+            encoding = [
+                "json+zstd",
+                "json+lz4",
+                "json",
+            ]
+
+        self.host = host if parsed_host.hostname is None else parsed_host.hostname + parsed_host.path
+        self.port = port if parsed_host.port is None else parsed_host.port
         self.user = user
         self.source = source
         self.catalog = catalog
         self.schema = schema
         self.session_properties = session_properties
+        self._client_session = aiotrino.client.ClientSession(
+            user=user,
+            catalog=catalog,
+            schema=schema,
+            source=source,
+            properties=session_properties,
+            headers=http_headers,
+            transaction_id=NO_TRANSACTION,
+            extra_credential=extra_credential,
+            client_tags=client_tags,
+            roles=roles,
+            timezone=timezone,
+            encoding=encoding,
+        )
         # mypy cannot follow module import
-        self._http_session = None
+        if http_session is None:
+            self._http_session = aiotrino.client.TrinoRequest.http.ClientSession(
+                connector=aiotrino.client.TrinoTCPConnector(verify_ssl=verify)
+            )
+        else:
+            self._http_session = http_session
         self.http_headers = http_headers
-        self.http_scheme = http_scheme
+        self.http_scheme = http_scheme if not parsed_host.scheme else parsed_host.scheme
         self.auth = auth
-        self.redirect_handler = redirect_handler
+        self.extra_credential = extra_credential
         self.max_attempts = max_attempts
         self.request_timeout = request_timeout
+        self.client_tags = client_tags
 
         self._isolation_level = isolation_level
         self._request = None
         self._transaction = None
+        self.legacy_primitive_types = legacy_primitive_types
+        self.legacy_prepared_statements = legacy_prepared_statements
         self._verify_ssl = verify
 
     @property
-    def isolation_level(self):
+    def isolation_level(self) -> IsolationLevel:
         return self._isolation_level
 
     @property
-    def transaction(self):
+    def transaction(self) -> Transaction:
         return self._transaction
 
     async def __aenter__(self):
@@ -144,40 +261,109 @@ class Connection(object):
         self._transaction = None
 
     def _create_request(self):
-        # Creating session here because aiohttp requires it to be created inside the event loop. 
+        # Creating session here because aiohttp requires it to be created inside the event loop.
         # The Connection only calls this from async functions so therefore it will be in event loop
         if self._http_session is None:
-            self._http_session = aiohttp.ClientSession(
-                connector=aiotrino.client.TrinoTCPConnector(verify_ssl=self._verify_ssl)
-            )  # type: ignore
+            self._http_session = aiohttp.ClientSession(connector=aiotrino.client.TrinoTCPConnector(verify_ssl=self._verify_ssl))  # type: ignore
 
         return aiotrino.client.TrinoRequest(
-            self.host,
-            self.port,
-            self.user,
-            self.source,
-            self.catalog,
-            self.schema,
-            self.session_properties,
-            self._http_session,
-            self.http_headers,
-            NO_TRANSACTION,
-            self.http_scheme,
-            self.auth,
-            self.redirect_handler,
-            self.max_attempts,
-            self.request_timeout,
+            host=self.host,
+            port=self.port,
+            client_session=self._client_session,
+            http_session=self._http_session,
+            http_scheme=self.http_scheme,
+            auth=self.auth,
+            max_attempts=self.max_attempts,
+            request_timeout=self.request_timeout,
         )
 
-    async def cursor(self):
+    async def cursor(self, cursor_style: str = "row", legacy_primitive_types: bool = None) -> "Cursor":
         """Return a new :py:class:`Cursor` object using the connection."""
         if self.isolation_level != IsolationLevel.AUTOCOMMIT:
             if self.transaction is None:
                 await self.start_transaction()
-            request = self.transaction._request
+
+        if self.transaction is not None:
+            request = self.transaction.request
         else:
             request = self._create_request()
-        return Cursor(self, request)
+
+        cursor_class = {
+            # Add any custom Cursor classes here
+            "segment": SegmentCursor,
+            "row": Cursor,
+        }.get(cursor_style.lower(), Cursor)
+
+        return cursor_class(
+            self,
+            request,
+            legacy_primitive_types=(
+                legacy_primitive_types if legacy_primitive_types is not None else self.legacy_primitive_types
+            ),
+        )
+
+    async def _use_legacy_prepared_statements(self):
+        if self.legacy_prepared_statements is not None:
+            return self.legacy_prepared_statements
+
+        value = must_use_legacy_prepared_statements.get((self.host, self.port))
+        if value is None:
+            try:
+                query = aiotrino.client.TrinoQuery(self._create_request(), query="EXECUTE IMMEDIATE 'SELECT 1'")
+                await query.execute()
+                value = False
+            except Exception as e:
+                logger.warning(
+                    "EXECUTE IMMEDIATE not available for %s:%s; defaulting to legacy prepared statements (%s)",
+                    self.host,
+                    self.port,
+                    e,
+                )
+                value = True
+            must_use_legacy_prepared_statements.put((self.host, self.port), value)
+        return value
+
+    def is_closed(self) -> bool:
+        return self._http_session and self._http_session.closed
+
+
+class DescribeOutput(NamedTuple):
+    name: str
+    catalog: str
+    schema: str
+    table: str
+    type: str
+    type_size: int
+    aliased: bool
+
+    @classmethod
+    def from_row(cls, row: list[Any]):
+        return cls(*row)
+
+
+class ColumnDescription(NamedTuple):
+    name: str
+    type_code: int
+    display_size: int
+    internal_size: int
+    precision: int
+    scale: int
+    null_ok: bool
+
+    @classmethod
+    def from_column(cls, column: dict[str, Any]):
+        type_signature = column["typeSignature"]
+        raw_type = type_signature["rawType"]
+        arguments = type_signature["arguments"]
+        return cls(
+            column["name"],  # name
+            column["type"],  # type_code
+            None,  # display_size
+            arguments[0]["value"] if raw_type in constants.LENGTH_TYPES else None,  # internal_size
+            arguments[0]["value"] if raw_type in constants.PRECISION_TYPES else None,  # precision
+            arguments[1]["value"] if raw_type in constants.SCALE_TYPES else None,  # scale
+            None,  # null_ok
+        )
 
 
 class Cursor(object):
@@ -188,55 +374,91 @@ class Cursor(object):
 
     """
 
-    def __init__(self, connection: Connection, request: aiotrino.client.TrinoRequest):
+    def __init__(
+        self,
+        connection: Connection,
+        request: aiotrino.client.TrinoRequest,
+        legacy_primitive_types: bool = False,
+    ):
         if not isinstance(connection, Connection):
-            raise ValueError(
-                "connection must be a Connection object: {}".format(type(connection))
-            )
+            raise ValueError("connection must be a Connection object: {}".format(type(connection)))
         self._connection = connection
         self._request = request
 
         self.arraysize = 1
         self._iterator = None
         self._query = None
+        self._legacy_primitive_types = legacy_primitive_types
 
     def __aiter__(self):
         return self._iterator
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        await self.close()
+
     @property
-    def connection(self):
+    def connection(self) -> Connection:
         return self._connection
 
     @property
-    def description(self):
-        if self._query.columns is None:
-            return None
-
-        # [ (name, type_code, display_size, internal_size, precision, scale, null_ok) ]
-        return [
-            (col["name"], col["type"], None, None, None, None, None)
-            for col in self._query.columns
-        ]
+    def info_uri(self) -> str:
+        if self._query is not None:
+            return self._query.info_uri
+        return None
 
     @property
-    def rowcount(self):
-        """Not supported.
+    def update_type(self) -> str:
+        if self._query is not None:
+            return self._query.update_type
+        return None
 
-        Trino cannot reliablity determine the number of rows returned by an
-        operation. For example, the result of a SELECT query is streamed and
-        the number of rows is only knowns when all rows have been retrieved.
+    async def get_description(self) -> list[ColumnDescription]:
+        if self._query is None or await self._query.get_columns() is None:
+            return None
+
+        return [ColumnDescription.from_column(col) for col in await self._query.get_columns()]
+
+    @property
+    def rowcount(self) -> int:
+        """The rowcount will be returned for INSERT, UPDATE, DELETE, MERGE
+        and CTAS statements based on `update_count` returned by the Trino
+        API.
+
+        If the rowcount can't be determined, -1 will be returned.
+
+        Trino cannot reliably determine the number of rows returned for DQL
+        queries. For example, the result of a SELECT query is streamed and
+        the number of rows is only known when all rows have been retrieved.
+
+        See https://peps.python.org/pep-0249/#rowcount
         """
-
+        if self._query is not None and self._query.update_count is not None:
+            return self._query.update_count
         return -1
 
     @property
-    def stats(self):
+    def stats(self) -> dict[Any, Any]:
         if self._query is not None:
             return self._query.stats
         return None
 
     @property
-    def warnings(self):
+    def query_id(self) -> str:
+        if self._query is not None:
+            return self._query.query_id
+        return None
+
+    @property
+    def query(self) -> str:
+        if self._query is not None:
+            return self._query.query
+        return None
+
+    @property
+    def warnings(self) -> list[dict[Any, Any]]:
         if self._query is not None:
             return self._query.warnings
         return None
@@ -247,57 +469,42 @@ class Cursor(object):
     def setoutputsize(self, size, column):
         raise aiotrino.exceptions.NotSupportedError
 
-    async def _prepare_statement(self, operation, statement_name):
+    async def _prepare_statement(self, statement: str, name: str) -> None:
         """
-        Prepends the given `operation` with "PREPARE <statement_name> FROM" and
-        executes as a prepare statement.
+        Registers a prepared statement for the provided `operation` with the
+        `name` assigned to it.
 
-        :param operation: sql to be executed.
-        :param statement_name: name that will be assigned to the prepare
-            statement.
-
-        :raises aiotrino.exceptions.FailedToObtainAddedPrepareHeader: Error raised
-            when unable to find the 'X-Trino-Added-Prepare' for the PREPARE
-            statement request.
-
-        :return: string representing the value of the 'X-Trino-Added-Prepare'
-            header.
+        :param statement: sql to be executed.
+        :param name: name that will be assigned to the prepared statement.
         """
-        sql = 'PREPARE {statement_name} FROM {operation}'.format(
-            statement_name=statement_name,
-            operation=operation
-        )
+        sql = f"PREPARE {name} FROM {statement}"
 
         # Send prepare statement. Copy the _request object to avoid poluting the
         # one that is going to be used to execute the actual operation.
-        query = aiotrino.client.TrinoQuery(self._request.clone(), sql=sql)
-        result = await query.execute()
+        query = aiotrino.client.TrinoQuery(
+            self.connection._create_request(),
+            query=sql,
+            legacy_primitive_types=self._legacy_primitive_types,
+        )
+        await query.execute()
 
-        # Iterate until the 'X-Trino-Added-Prepare' header is found or
-        # until there are no more results
-        async for _ in result:
-            response_headers = result.response_headers
+    def _execute_prepared_statement(self, statement_name: str, params) -> aiotrino.client.TrinoQuery:
+        sql = "EXECUTE " + statement_name + " USING " + ",".join(map(self._format_prepared_param, params))
+        return aiotrino.client.TrinoQuery(self._request, query=sql, legacy_primitive_types=self._legacy_primitive_types)
 
-            if constants.HEADERS.ADDED_PREPARE in response_headers:
-                return response_headers[constants.HEADERS.ADDED_PREPARE]
-        else:
-            # 406 no longer returns results so there is nothing to loop over.
-            response_headers = result.response_headers
-            if constants.HEADERS.ADDED_PREPARE in response_headers:
-                return response_headers[constants.HEADERS.ADDED_PREPARE]
+    def _execute_immediate_statement(self, statement: str, params) -> aiotrino.client.TrinoQuery:
+        """
+        Binds parameters and executes a statement in one call.
 
-        raise aiotrino.exceptions.FailedToObtainAddedPrepareHeader
-
-    def _get_added_prepare_statement_trino_query(
-        self,
-        statement_name,
-        params
-    ):
-        sql = 'EXECUTE ' + statement_name + ' USING ' + ','.join(map(self._format_prepared_param, params))
-
-        # No need to deepcopy _request here because this is the actual request
-        # operation
-        return aiotrino.client.TrinoQuery(self._request, sql=sql)
+        :param statement: sql to be executed.
+        :param params: parameters to be bound.
+        """
+        sql = (
+            "EXECUTE IMMEDIATE '" + statement.replace("'", "''") + "' USING " + ",".join(map(self._format_prepared_param, params))
+        )
+        return aiotrino.client.TrinoQuery(
+            self.connection._create_request(), query=sql, legacy_primitive_types=self._legacy_primitive_types
+        )
 
     def _format_prepared_param(self, param):
         """
@@ -324,104 +531,128 @@ class Cursor(object):
             return "DOUBLE '%s'" % param
 
         if isinstance(param, str):
-            return ("'%s'" % param.replace("'", "''"))
+            return "'%s'" % param.replace("'", "''")
 
-        if isinstance(param, bytes):
+        if isinstance(param, (bytes, bytearray)):
             return "X'%s'" % param.hex()
 
-        if isinstance(param, datetime.datetime):
-            datetime_str = param.strftime("%Y-%m-%d %H:%M:%S.%f %Z")
-            # strip trailing whitespace if param has no zone
-            datetime_str = datetime_str.rstrip(" ")
+        if isinstance(param, datetime.datetime) and param.tzinfo is None:
+            datetime_str = param.strftime("%Y-%m-%d %H:%M:%S.%f")
             return "TIMESTAMP '%s'" % datetime_str
 
+        if isinstance(param, datetime.datetime) and param.tzinfo is not None:
+            datetime_str = param.strftime("%Y-%m-%d %H:%M:%S.%f")
+            # named timezones
+            if isinstance(param.tzinfo, ZoneInfo):
+                return "TIMESTAMP '%s %s'" % (datetime_str, param.tzinfo.key)
+            # offset-based timezones
+            return "TIMESTAMP '%s %s'" % (datetime_str, param.tzinfo.tzname(param))
+
+        # We can't calculate the offset for a time without a point in time
+        if isinstance(param, datetime.time) and param.tzinfo is None:
+            time_str = param.strftime("%H:%M:%S.%f")
+            return "TIME '%s'" % time_str
+
+        if isinstance(param, datetime.time) and param.tzinfo is not None:
+            time_str = param.strftime("%H:%M:%S.%f")
+            # named timezones
+            if isinstance(param.tzinfo, ZoneInfo):
+                utc_offset = datetime.datetime.now(tz=param.tzinfo).strftime("%z")
+                return "TIME '%s %s:%s'" % (time_str, utc_offset[:3], utc_offset[3:])
+            # offset-based timezones
+            return "TIME '%s %s'" % (time_str, param.strftime("%Z")[3:])
+
+        if isinstance(param, datetime.date):
+            date_str = param.strftime("%Y-%m-%d")
+            return "DATE '%s'" % date_str
+
         if isinstance(param, list):
-            return "ARRAY[%s]" % ','.join(map(self._format_prepared_param, param))
+            return "ARRAY[%s]" % ",".join(map(self._format_prepared_param, param))
+
+        if isinstance(param, tuple):
+            return "ROW(%s)" % ",".join(map(self._format_prepared_param, param))
 
         if isinstance(param, dict):
             keys = list(param.keys())
             values = [param[key] for key in keys]
-            return "MAP(%s, %s)" % (
-                self._format_prepared_param(keys),
-                self._format_prepared_param(values)
-            )
+            return "MAP({}, {})".format(self._format_prepared_param(keys), self._format_prepared_param(values))
 
         if isinstance(param, uuid.UUID):
             return "UUID '%s'" % param
 
+        if isinstance(param, Decimal):
+            return "DECIMAL '%s'" % format(param, "f")
+
         raise aiotrino.exceptions.NotSupportedError("Query parameter of type '%s' is not supported." % type(param))
 
-    async def _deallocate_prepare_statement(self, added_prepare_header, statement_name):
-        sql = 'DEALLOCATE PREPARE ' + statement_name
-
-        # Send deallocate statement. Copy the _request object to avoid poluting the
-        # one that is going to be used to execute the actual operation.
-        query = aiotrino.client.TrinoQuery(self._request.clone(), sql=sql)
-        result = await query.execute(
-            additional_http_headers={
-                constants.HEADERS.PREPARED_STATEMENT: added_prepare_header
-            }
+    async def _deallocate_prepared_statement(self, statement_name: str) -> None:
+        sql = "DEALLOCATE PREPARE " + statement_name
+        query = aiotrino.client.TrinoQuery(
+            self.connection._create_request(), query=sql, legacy_primitive_types=self._legacy_primitive_types
         )
+        await query.execute()
 
-        # Iterate until the 'X-Trino-Deallocated-Prepare' header is found or
-        # until there are no more results
-        async for _ in result:
-            response_headers = result.response_headers
-
-            if constants.HEADERS.DEALLOCATED_PREPARE in response_headers:
-                return response_headers[constants.HEADERS.DEALLOCATED_PREPARE]
-        else:
-            # 406 no longer returns results so there is nothing to loop over.
-            response_headers = result.response_headers
-            if constants.HEADERS.DEALLOCATED_PREPARE in response_headers:
-                return response_headers[constants.HEADERS.DEALLOCATED_PREPARE]
-
-        raise aiotrino.exceptions.FailedToObtainDeallocatedPrepareHeader
-
-    def _generate_unique_statement_name(self):
-        return 'st_' + uuid.uuid4().hex.replace('-', '')
+    def _generate_unique_statement_name(self) -> str:
+        return "st_" + uuid.uuid4().hex.replace("-", "")
 
     async def execute(self, operation, params=None):
         if params:
-            assert isinstance(params, (list, tuple)), (
-                'params must be a list or tuple containing the query '
-                'parameter values'
-            )
+            assert isinstance(params, (list, tuple)), "params must be a list or tuple containing the query parameter values"
 
-            statement_name = self._generate_unique_statement_name()
-            # Send prepare statement
-            added_prepare_header = await self._prepare_statement(
-                operation, statement_name
-            )
+            if await self.connection._use_legacy_prepared_statements():
+                statement_name = self._generate_unique_statement_name()
+                await self._prepare_statement(operation, statement_name)
 
-            try:
-                # Send execute statement and assign the return value to `results`
-                # as it will be returned by the function
-                self._query = self._get_added_prepare_statement_trino_query(
-                    statement_name, params
-                )
-                result = await self._query.execute(
-                    additional_http_headers={
-                        constants.HEADERS.PREPARED_STATEMENT: added_prepare_header
-                    }
-                )
-            finally:
-                # Send deallocate statement
-                # At this point the query can be deallocated since it has already
-                # been executed
-                await self._deallocate_prepare_statement(added_prepare_header, statement_name)
+                try:
+                    # Send execute statement and assign the return value to `results`
+                    # as it will be returned by the function
+                    self._query = self._execute_prepared_statement(statement_name, params)
+                    self._iterator = aiter(await self._query.execute())
+                finally:
+                    # Send deallocate statement
+                    # At this point the query can be deallocated since it has already
+                    # been executed
+                    # TODO: Consider caching prepared statements if requested by caller
+                    await self._deallocate_prepared_statement(statement_name)
+            else:
+                self._query = self._execute_immediate_statement(operation, params)
+                self._iterator = aiter(await self._query.execute())
 
         else:
-            self._query = aiotrino.client.TrinoQuery(self._request, sql=operation)
-            result = await self._query.execute()
-        self._iterator = aiter(result)
-        return result
+            self._query = aiotrino.client.TrinoQuery(
+                self._request, query=operation, legacy_primitive_types=self._legacy_primitive_types
+            )
+            self._iterator = aiter(await self._query.execute())
+        return self
 
-    def executemany(self, operation, seq_of_params):
-        raise aiotrino.exceptions.NotSupportedError
+    async def executemany(self, operation, seq_of_params):
+        """
+        PEP-0249: Prepare a database operation (query or command) and then
+        execute it against all parameter sequences or mappings found in the sequence seq_of_parameters.
+        Modules are free to implement this method using multiple calls to
+        the .execute() method or by using array operations to have the
+        database process the sequence as a whole in one call.
 
-    async def fetchone(self):
-        # type: () -> Optional[List[Any]]
+        Use of this method for an operation which produces one or more result
+        sets constitutes undefined behavior, and the implementation is permitted (but not required)
+        to raise an exception when it detects that a result set has been created by an invocation of the operation.
+
+        The same comments as for .execute() also apply accordingly to this method.
+
+        Return values are not defined.
+        """
+        for parameters in seq_of_params[:-1]:
+            await self.execute(operation, parameters)
+            await self.fetchall()
+            if self._query.update_type is None:
+                raise NotSupportedError("Query must return update type")
+        if seq_of_params:
+            await self.execute(operation, seq_of_params[-1])
+        else:
+            await self.execute(operation)
+        return self
+
+    async def fetchone(self) -> Optional[list[Any]]:
         """
 
         PEP-0249: Fetch the next row of a query result set, returning a single
@@ -432,14 +663,14 @@ class Cursor(object):
         """
 
         try:
+            assert self._iterator is not None
             return await anext(self._iterator)
         except StopAsyncIteration:
             return None
         except aiotrino.exceptions.HttpError as err:
-            raise aiotrino.exceptions.OperationalError(str(err))
+            raise aiotrino.exceptions.OperationalError(str(err)) from None
 
-    async def fetchmany(self, size=None):
-        # type: (Optional[int]) -> List[List[Any]]
+    async def fetchmany(self, size: Optional[int] = None) -> list[list[Any]]:
         """
         PEP-0249: Fetch the next set of rows of a query result, returning a
         sequence of sequences (e.g. a list of tuples). An empty sequence is
@@ -463,32 +694,65 @@ class Cursor(object):
         if size is None:
             size = self.arraysize
 
-        result = []
-        for _ in range(size):
-            row = await self.fetchone()
-            if row is None:
-                break
-            result.append(row)
+        return [row async for row in aio_islice(aiter(self.fetchone, None), size)]
 
-        return result
+    async def describe(self, sql: str) -> list[DescribeOutput]:
+        """
+        List the output columns of a SQL statement, including the column name (or alias), catalog, schema, table, type,
+        type size in bytes, and a boolean indicating if the column is aliased.
+
+        :param sql: SQL statement
+        """
+        statement_name = self._generate_unique_statement_name()
+        await self._prepare_statement(sql, statement_name)
+        try:
+            sql = f"DESCRIBE OUTPUT {statement_name}"
+            self._query = aiotrino.client.TrinoQuery(
+                self._request,
+                query=sql,
+                legacy_primitive_types=self._legacy_primitive_types,
+            )
+            result = await self._query.execute()
+        finally:
+            await self._deallocate_prepared_statement(statement_name)
+
+        return [DescribeOutput.from_row(x) async for x in result]
 
     def genall(self):
         return self._query.result
 
-    async def fetchall(self):
-        # type: () -> List[List[Any]]
-        return [row async for row in self.genall()]
+    async def fetchall(self) -> list[list[Any]]:
+        return [row async for row in aiter(self.fetchone, None)]
 
     async def cancel(self):
         if self._query is None:
-            raise aiotrino.exceptions.OperationalError(
-                "Cancel query failed; no running query"
-            )
+            return
         await self._query.cancel()
 
     async def close(self):
+        await self.cancel()
         await self._request.close()
-        await self._connection.close()
+
+
+class SegmentCursor(Cursor):
+    def __init__(self, connection, request, legacy_primitive_types: bool = False):
+        super().__init__(connection, request, legacy_primitive_types=legacy_primitive_types)
+        if self.connection._client_session.encoding is None:
+            raise ValueError("SegmentCursor can only be used if encoding is set on the connection")
+
+    async def execute(self, operation, params=None):
+        if params:
+            # TODO: refactor code to allow for params to be supported
+            raise ValueError("params not supported")
+
+        self._query = aiotrino.client.TrinoQuery(
+            self._request,
+            query=operation,
+            legacy_primitive_types=self._legacy_primitive_types,
+            fetch_mode="segments",
+        )
+        self._iterator = aiter(await self._query.execute())
+        return self
 
 
 Date = datetime.date
@@ -516,13 +780,9 @@ class DBAPITypeObject:
 
 STRING = DBAPITypeObject("VARCHAR", "CHAR", "VARBINARY", "JSON", "IPADDRESS")
 
-BINARY = DBAPITypeObject(
-    "ARRAY", "MAP", "ROW", "HyperLogLog", "P4HyperLogLog", "QDigest"
-)
+BINARY = DBAPITypeObject("ARRAY", "MAP", "ROW", "HyperLogLog", "P4HyperLogLog", "QDigest")
 
-NUMBER = DBAPITypeObject(
-    "BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "REAL", "DOUBLE", "DECIMAL"
-)
+NUMBER = DBAPITypeObject("BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "REAL", "DOUBLE", "DECIMAL")
 
 DATETIME = DBAPITypeObject(
     "DATE",

@@ -10,6 +10,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from enum import Enum, unique
+from typing import Iterable
+
 import aiotrino.client
 import aiotrino.exceptions
 import aiotrino.logging
@@ -24,7 +27,8 @@ ROLLBACK = "ROLLBACK"
 COMMIT = "COMMIT"
 
 
-class IsolationLevel(object):
+@unique
+class IsolationLevel(Enum):
     AUTOCOMMIT = 0
     READ_UNCOMMITTED = 1
     READ_COMMITTED = 2
@@ -32,44 +36,46 @@ class IsolationLevel(object):
     SERIALIZABLE = 4
 
     @classmethod
-    def levels(cls):
-        return {k for k in cls.__dict__.keys() if not k.startswith("_")}
+    def levels(cls) -> Iterable[str]:
+        return {isolation_level.name for isolation_level in IsolationLevel}
 
     @classmethod
-    def values(cls):
-        return {getattr(cls, level) for level in cls.levels()}
+    def values(cls) -> Iterable[int]:
+        return {isolation_level.value for isolation_level in IsolationLevel}
 
     @classmethod
-    def check(cls, level):
+    def check(cls, level: int) -> int:
         if level not in cls.values():
             raise ValueError("invalid isolation level {}".format(level))
         return level
 
 
 class Transaction(object):
-    def __init__(self, request):
+    def __init__(self, request: aiotrino.client.TrinoRequest):
         self._request = request
         self._id = NO_TRANSACTION
 
     @property
-    def id(self):
+    def id(self) -> str:
         return self._id
+
+    @property
+    def request(self) -> aiotrino.client.TrinoRequest:
+        return self._request
 
     async def begin(self):
         response = await self._request.post(START_TRANSACTION)
         if not response.ok:
-            raise aiotrino.exceptions.DatabaseError(
-                "failed to start transaction: {}".format(response.status_code)
-            )
-        transaction_id = response.headers.get(constants.HEADERS.STARTED_TRANSACTION)
+            raise aiotrino.exceptions.DatabaseError("failed to start transaction: {}".format(response.status))
+        transaction_id = response.headers.get(constants.HEADER_STARTED_TRANSACTION)
         if transaction_id and transaction_id != NO_TRANSACTION:
-            self._id = response.headers[constants.HEADERS.STARTED_TRANSACTION]
+            self._id = response.headers[constants.HEADER_STARTED_TRANSACTION]
         status = await self._request.process(response)
         while status.next_uri:
             response = await self._request.get(status.next_uri)
-            transaction_id = response.headers.get(constants.HEADERS.STARTED_TRANSACTION)
+            transaction_id = response.headers.get(constants.HEADER_STARTED_TRANSACTION)
             if transaction_id and transaction_id != NO_TRANSACTION:
-                self._id = response.headers[constants.HEADERS.STARTED_TRANSACTION]
+                self._id = response.headers[constants.HEADER_STARTED_TRANSACTION]
             status = await self._request.process(response)
         self._request.transaction_id = self._id
         logger.info("transaction started: " + self._id)
@@ -80,9 +86,7 @@ class Transaction(object):
             # loop through to catch any exceptions
             [x async for x in await query.execute()]
         except Exception as err:
-            raise aiotrino.exceptions.DatabaseError(
-                "failed to commit transaction {}: {}".format(self._id, err)
-            )
+            raise aiotrino.exceptions.DatabaseError("failed to commit transaction {}: {}".format(self._id, err)) from None
         self._id = NO_TRANSACTION
         self._request.transaction_id = self._id
 
@@ -92,9 +96,7 @@ class Transaction(object):
             # loop through to catch any exceptions
             [x async for x in await query.execute()]
         except Exception as err:
-            raise aiotrino.exceptions.DatabaseError(
-                "failed to rollback transaction {}: {}".format(self._id, err)
-            )
+            raise aiotrino.exceptions.DatabaseError("failed to rollback transaction {}: {}".format(self._id, err)) from None
         self._id = NO_TRANSACTION
         self._request.transaction_id = self._id
 

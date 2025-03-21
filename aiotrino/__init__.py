@@ -11,5 +11,28 @@
 # limitations under the License.
 
 from . import auth, client, constants, dbapi, exceptions, logging
+from ._version import (
+    __author__,
+    __author_email__,
+    __description__,
+    __license__,
+    __title__,
+    __url__,
+    __version__,
+)
 
-__version__ = "0.2.3"
+__all__ = [
+    "auth",
+    "client",
+    "constants",
+    "dbapi",
+    "exceptions",
+    "logging",
+    "__author__",
+    "__author_email__",
+    "__description__",
+    "__license__",
+    "__title__",
+    "__url__",
+    "__version__",
+]

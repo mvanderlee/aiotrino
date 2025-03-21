@@ -1,0 +1,7 @@
+__title__ = "aiotrino"
+__description__ = "Asyncio client for the Trino distributed SQL Engine"
+__url__ = "https://github.com/mvanderlee/aiotrino"
+__version__ = "0.3.0"
+__author__ = "Michiel van der Lee & Trino Team"
+__author_email__ = "jmt.vanderlee@gmail.com"
+__license__ = "Apache 2.0"

@@ -15,152 +15,14 @@ This module defines exceptions for Trino operations. It follows the structure
 defined in pep-0249.
 """
 
-import asyncio
-import functools
-import random
+from typing import Any, Dict, Optional, Tuple
 
 import aiotrino.logging
 
 logger = aiotrino.logging.get_logger(__name__)
 
 
-class HttpError(Exception):
-    pass
-
-
-class Http503Error(HttpError):
-    pass
-
-
-class TrinoError(Exception):
-    pass
-
-
-class TimeoutError(Exception):
-    pass
-
-
-class TrinoQueryError(Exception):
-    def __init__(self, error, query_id=None):
-        self._error = error
-        self._query_id = query_id
-
-    @property
-    def error_code(self):
-        return self._error.get("errorCode", None)
-
-    @property
-    def error_name(self):
-        return self._error.get("errorName", None)
-
-    @property
-    def error_type(self):
-        return self._error.get("errorType", None)
-
-    @property
-    def error_exception(self):
-        return self.failure_info.get("type", None) if self.failure_info else None
-
-    @property
-    def failure_info(self):
-        return self._error.get("failureInfo", None)
-
-    @property
-    def message(self):
-        return self._error.get("message", "Trino did no return an error message")
-
-    @property
-    def error_location(self):
-        location = self._error["errorLocation"]
-        return (location["lineNumber"], location["columnNumber"])
-
-    @property
-    def query_id(self):
-        return self._query_id
-
-    def __repr__(self):
-        return '{}(type={}, name={}, message="{}", query_id={})'.format(
-            self.__class__.__name__,
-            self.error_type,
-            self.error_name,
-            self.message,
-            self.query_id,
-        )
-
-    def __str__(self):
-        return repr(self)
-
-
-class TrinoExternalError(TrinoQueryError):
-    pass
-
-
-class TrinoInternalError(TrinoQueryError):
-    pass
-
-
-class TrinoUserError(TrinoQueryError):
-    pass
-
-
-def retry_with(handle_retry, exceptions, conditions, max_attempts):
-    def wrapper(func):
-        @functools.wraps(func)
-        async def decorated(*args, **kwargs):
-            error = None
-            result = None
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    result = await func(*args, **kwargs)
-                    if any(guard(result) for guard in conditions):
-                        await handle_retry.retry(func, args, kwargs, None, attempt)
-                        continue
-                    return result
-                except Exception as err:
-                    error = err
-                    if any(isinstance(err, exc) for exc in exceptions):
-                        await handle_retry.retry(func, args, kwargs, err, attempt)
-                        continue
-                    break
-            logger.info("failed after %s attempts", attempt)
-            if error is not None:
-                raise error
-            return result
-
-        return decorated
-
-    return wrapper
-
-
-class DelayExponential(object):
-    def __init__(
-        self, base=0.1, exponent=2, jitter=True, max_delay=2 * 3600  # 100ms  # 2 hours
-    ):
-        self._base = base
-        self._exponent = exponent
-        self._jitter = jitter
-        self._max_delay = max_delay
-
-    def __call__(self, attempt):
-        delay = float(self._base) * (self._exponent ** attempt)
-        if self._jitter:
-            delay *= random.random()
-        delay = min(float(self._max_delay), delay)
-        return delay
-
-
-class RetryWithExponentialBackoff(object):
-    def __init__(
-        self, base=0.1, exponent=2, jitter=True, max_delay=2 * 3600  # 100ms  # 2 hours
-    ):
-        self._get_delay = DelayExponential(base, exponent, jitter, max_delay)
-
-    async def retry(self, func, args, kwargs, err, attempt):
-        delay = self._get_delay(attempt)
-        await asyncio.sleep(delay)
-
-
-# PEP 249
+# PEP 249 Errors
 class Error(Exception):
     pass
 
@@ -201,17 +63,100 @@ class NotSupportedError(DatabaseError):
     pass
 
 
-class FailedToObtainAddedPrepareHeader(Error):
-    """
-    Raise this exception when unable to find the 'X-Trino-Added-Prepare'
-    header in the response of a PREPARE statement request.
-    """
+# dbapi module errors (extending PEP 249 errors)
+class TrinoAuthError(OperationalError):
     pass
 
 
-class FailedToObtainDeallocatedPrepareHeader(Error):
-    """
-    Raise this exception when unable to find the 'X-Trino-Deallocated-Prepare'
-    header in the response of a DEALLOCATED statement request.
-    """
+class TrinoConnectionError(OperationalError):
+    pass
+
+
+class TrinoDataError(NotSupportedError):
+    pass
+
+
+class TrinoQueryError(Error):
+    def __init__(self, error: Dict[str, Any], query_id: Optional[str] = None) -> None:
+        self._error = error
+        self._query_id = query_id
+
+    @property
+    def error_code(self) -> Optional[int]:
+        return self._error.get("errorCode", None)
+
+    @property
+    def error_name(self) -> Optional[str]:
+        return self._error.get("errorName", None)
+
+    @property
+    def error_type(self) -> Optional[str]:
+        return self._error.get("errorType", None)
+
+    @property
+    def error_exception(self) -> Optional[str]:
+        return self.failure_info.get("type", None) if self.failure_info else None
+
+    @property
+    def failure_info(self) -> Optional[Dict[str, Any]]:
+        return self._error.get("failureInfo", None)
+
+    @property
+    def message(self) -> str:
+        return self._error.get("message", "Trino did not return an error message")
+
+    @property
+    def error_location(self) -> Optional[Tuple[int, int]]:
+        location = self._error.get("errorLocation", None)
+        if location is None:
+            return None
+        line_number = location.get("lineNumber", None)
+        column_number = location.get("columnNumber", None)
+        if line_number is None or column_number is None:
+            return None
+        return (line_number, column_number)
+
+    @property
+    def query_id(self) -> Optional[str]:
+        return self._query_id
+
+    def __repr__(self) -> str:
+        return '{}(type={}, name={}, message="{}", query_id={})'.format(
+            self.__class__.__name__,
+            self.error_type,
+            self.error_name,
+            self.message,
+            self.query_id,
+        )
+
+    def __str__(self) -> str:
+        return repr(self)
+
+
+class TrinoExternalError(TrinoQueryError, OperationalError):
+    pass
+
+
+class TrinoInternalError(TrinoQueryError, InternalError):
+    pass
+
+
+class TrinoUserError(TrinoQueryError, ProgrammingError):
+    pass
+
+
+# client module errors
+class HttpError(Exception):
+    pass
+
+
+class Http502Error(HttpError):
+    pass
+
+
+class Http503Error(HttpError):
+    pass
+
+
+class Http504Error(HttpError):
     pass
