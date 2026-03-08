@@ -1,0 +1,19 @@
+gantt
+    title fetchall_arrow() — Pipelined Segment Retrieval
+    todayMarker off
+    dateFormat x
+    axisFormat %L
+    section Segment 1
+        await URI            :a1, 0, 100
+        download (async)     :d1, 100, 400
+        deserialize (thread) :r1, 400, 550
+    section Segment 2
+        await URI            :a2, 100, 200
+        download (async)     :d2, 200, 500
+        deserialize (thread) :r2, 500, 650
+    section Segment 3
+        await URI            :a3, 200, 300
+        download (async)     :d3, 300, 600
+        deserialize (thread) :r3, 600, 750
+    section Result
+        concat_tables()      :c1, 750, 850

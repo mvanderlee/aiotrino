@@ -1,0 +1,2 @@
+aiotrino[arrow] @ git+https://github.com/jonasbrami/aiotrino.git@main
+pandas

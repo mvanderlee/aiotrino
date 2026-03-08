@@ -641,7 +641,8 @@ class TrinoRequest:
             max_attempts=self.max_attempts,
             request_timeout=self._request_timeout,
             handle_retry=self._handle_retry,
-            client_session=ClientSession(user=self._client_session.user),
+            client_session=self._client_session,
+            http_session=self._http_session,
         )
 
     @property

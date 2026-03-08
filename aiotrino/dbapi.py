@@ -20,6 +20,8 @@ decide to convert then to a list of tuples.
 from __future__ import annotations
 
 import datetime
+import concurrent.futures
+
 import math
 import uuid
 from collections import OrderedDict
@@ -51,6 +53,17 @@ from aiotrino.exceptions import (
 )
 from aiotrino.transaction import NO_TRANSACTION, IsolationLevel, Transaction
 from aiotrino.utils import aiter, anext
+import asyncio
+from asyncio import Semaphore
+from contextlib import nullcontext
+
+# Optional pyarrow import
+try:
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+    PYARROW_AVAILABLE = True
+except ImportError:
+    PYARROW_AVAILABLE = False
 
 __all__ = [
     # https://www.python.org/dev/peps/pep-0249/#globals
@@ -79,6 +92,7 @@ threadsafety = 2
 paramstyle = "qmark"
 
 logger = aiotrino.logging.get_logger(__name__)
+
 
 
 class TimeBoundLRUCache:
@@ -172,6 +186,9 @@ class Connection(object):
                 "json+lz4",
                 "json",
             ]
+            # Only include arrow encoding if pyarrow is available
+            if PYARROW_AVAILABLE:
+                encoding.append("arrow")
 
         self.host = host if parsed_host.hostname is None else parsed_host.hostname + parsed_host.path
         self.port = port if parsed_host.port is None else parsed_host.port
@@ -732,13 +749,25 @@ class Cursor(object):
     async def close(self):
         await self.cancel()
         await self._request.close()
+    
+    async def fetchall_arrow(self) -> "pa.Table":
+        raise NotImplementedError(
+            "fetch_all_arrow is not implemented for this cursor type. "
+            "Use SegmentCursor for fetching results as Apache Arrow Table."
+        )
+    async def fetchone_arrow(self) -> Optional["pa.Table"]:
+        raise NotImplementedError(
+            "fetch_one_arrow is not implemented for this cursor type. "
+            "Use SegmentCursor for fetching results as Apache Arrow Table."
+        )
 
-
+    
 class SegmentCursor(Cursor):
     def __init__(self, connection, request, legacy_primitive_types: bool = False):
         super().__init__(connection, request, legacy_primitive_types=legacy_primitive_types)
         if self.connection._client_session.encoding is None:
             raise ValueError("SegmentCursor can only be used if encoding is set on the connection")
+        
 
     async def execute(self, operation, params=None):
         if params:
@@ -753,7 +782,80 @@ class SegmentCursor(Cursor):
         )
         self._iterator = aiter(await self._query.execute())
         return self
+    
+    def _from_ipc_to_record_batch(self, raw_segment) -> "pa.Table":
+        if not PYARROW_AVAILABLE:
+            raise ImportError(
+                "PyArrow is required for arrow functionality but is not installed. "
+                "Install it with: pip install pyarrow"
+            )
+        record_batch_reader = ipc.open_stream(raw_segment)
+        return record_batch_reader.read_all()
+        
+    async def _fetch_and_read_arrow_segment(self, segment, max_parallel_segment_fetch_semaphore: Semaphore = None, arrow_thread_pool: concurrent.futures.ThreadPoolExecutor|None= None) -> "pa.Table":
+        """
+        Download and decode the segment data into an Apache Arrow Table.
+        If pool is provided, the segment will be fetched in a thread pool. Pyarrow releases the GIL and deserializing, using threads allow to parallelize the deserialization.
+        If pool is not provided, the segment will be fetched in the current thread
+        If max_parallel_segment_fetch_semaphore, the download of the segment will be done after aquiring the semaphore.
+        """
+        assert segment.encoding in ("arrow", "arrow+zstd"), "fetch_and_read_segment can only be used with Arrow segments"
+        async with (max_parallel_segment_fetch_semaphore if max_parallel_segment_fetch_semaphore else nullcontext()):
+            logger.debug(f"Fetching arrow segment %s", segment)
+            raw_segment_data = await segment.segment.get_data()
+        if arrow_thread_pool:
+            arrow_segment = await asyncio.get_running_loop().run_in_executor(arrow_thread_pool, self._from_ipc_to_record_batch, raw_segment_data)
+        else:
+            arrow_segment =  self._from_ipc_to_record_batch(raw_segment_data)
+             
+        if isinstance(segment.segment, aiotrino.client.SpooledSegment):
+            await segment.segment.acknowledge()
+        
+        return arrow_segment
 
+    async def fetchone_arrow(self) -> Optional["pa.Table"]:
+        """
+        Fetch the next segment of the query result as an Apache Arrow Table.
+        #TODO add prefetching of the next(s) segment
+        """
+        if not PYARROW_AVAILABLE:
+            raise ImportError(
+                "PyArrow is required for arrow functionality but is not installed. "
+                "Install it with: pip install pyarrow"
+            )
+        segment = await self.fetchone()
+        if segment is None:
+            return None
+        arrow_segment = await self._fetch_and_read_arrow_segment(segment)
+        return arrow_segment
+    
+    async def fetchall_arrow(self) -> Optional["pa.Table"]:
+        """
+        Fetch the result of the query as an Apache Arrow Table.
+        This is very fast but materializes the entire result in memory.
+        
+        Asynchroneously fetch all the spooling segments, deserialize them in parallel and concatenate them into a single pyarrow table.
+        """ 
+        if not PYARROW_AVAILABLE:
+            raise ImportError(
+                "PyArrow is required for arrow functionality but is not installed. "
+                "Install it with: pip install pyarrow"
+            )
+            
+        max_parallel_segment_fetch_semaphore = Semaphore(constants.MAX_PARALLEL_SEGMENT_RETRIEVAL)  # Limit concurrent spooling downloads
+        # Pyarrow releases the GIL and deserializing, using threads allow to parallelize the deserialization.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=constants.ARROW_THREAD_POOL_SIZE) as arrow_thread_pool: 
+            arrow_segment_tasks = []
+            while segment := await self.fetchone():
+                arrow_segment_tasks.append(asyncio.create_task(self._fetch_and_read_arrow_segment(segment, max_parallel_segment_fetch_semaphore, arrow_thread_pool)))
+            segment_arrow_tables = await asyncio.gather(*arrow_segment_tasks)
+            # Concatenate all sub-tables into a single table
+        if segment_arrow_tables:
+            return pa.concat_tables(segment_arrow_tables)
+        else:
+            return None
+    
+            
 
 Date = datetime.date
 Time = datetime.time

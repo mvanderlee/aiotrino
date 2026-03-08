@@ -1,0 +1,16 @@
+sequenceDiagram
+    participant Client as Python Client
+    participant Coord as Trino Coordinator
+    participant Worker as Trino Worker
+    participant S3 as Object Storage
+
+    Client->>Coord: POST /v1/statement<br/>X-Trino-Query-Data-Encoding: arrow+zstd
+    Coord->>Worker: Execute query
+    Worker->>S3: Spool Arrow IPC segments<br/>(ZSTD compressed)
+    Coord-->>Client: Response with segment URIs
+    par Parallel async fetch
+        Client->>S3: GET segment 1
+        Client->>S3: GET segment 2
+        Client->>S3: GET segment N
+    end
+    Client->>Client: PyArrow deserialize<br/>(GIL-free, threaded)

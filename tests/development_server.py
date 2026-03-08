@@ -10,12 +10,15 @@ from testcontainers.localstack import LocalStackContainer
 
 from aiotrino.constants import DEFAULT_PORT
 
+
 MINIO_ROOT_USER = "minio-access-key"
 MINIO_ROOT_PASSWORD = "minio-secret-key"
 
+TRINO_DOCKER_REPOSITORY = os.environ.get("TRINO_DOCKER_REPOSITORY") or "trinodb/trino"
 TRINO_VERSION = os.environ.get("TRINO_VERSION") or "latest"
 TRINO_HOST = "localhost"
 
+ARROW_SPOOLING_SUPPORTED = os.environ.get("TRINO_ARROW_SPOOLING_SUPPORTED", "true").lower() == "true"
 
 def create_bucket(s3_client):
     bucket_name = "spooling"
@@ -42,7 +45,10 @@ def create_bucket(s3_client):
 
 
 @contextmanager
-def start_development_server(port=None, trino_version=TRINO_VERSION):
+def start_development_server(port=None, trino_repository=TRINO_DOCKER_REPOSITORY, trino_version=TRINO_VERSION, support_arrow_spooling=ARROW_SPOOLING_SUPPORTED):
+    """"
+    The extra support_arrow_spooling parameter is necessary until an official Trino image is release with support for the new spooling parameters.
+    """
     network = None
     localstack = None
     trino = None
@@ -50,6 +56,9 @@ def start_development_server(port=None, trino_version=TRINO_VERSION):
     try:
         network = Network().create()
         supports_spooling_protocol = TRINO_VERSION == "latest" or int(TRINO_VERSION) >= 466
+        if support_arrow_spooling:
+            supports_spooling_protocol = True
+        
         if supports_spooling_protocol:
             localstack = LocalStackContainer(image="localstack/localstack:latest", region_name="us-east-1") \
                 .with_name("localstack") \
@@ -68,11 +77,11 @@ def start_development_server(port=None, trino_version=TRINO_VERSION):
             # create spooling bucket
             create_bucket(localstack.get_client("s3"))
 
-        trino = DockerContainer(f"trinodb/trino:{trino_version}") \
+        trino = DockerContainer(f"{trino_repository}:{trino_version}") \
             .with_name("trino") \
             .with_network(network) \
             .with_env("TRINO_CONFIG_DIR", "/etc/trino") \
-            .with_bind_ports(DEFAULT_PORT, port)
+            .with_bind_ports(8080, DEFAULT_PORT)
 
         root = Path(__file__).parent.parent
 
@@ -86,16 +95,17 @@ def start_development_server(port=None, trino_version=TRINO_VERSION):
                     str(root / "etc/spooling-manager.properties"),
                     "/etc/trino/spooling-manager.properties", "rw") \
                 .with_volume_mapping(str(root / "etc/jvm.config"), "/etc/trino/jvm.config") \
-                .with_volume_mapping(str(root / "etc/config.properties"), "/etc/trino/config.properties")
+                .with_volume_mapping(str(root / f"etc/config{'-arrow' if support_arrow_spooling else ''}.properties"), "/etc/trino/config.properties")
         else:
             trino \
                 .with_volume_mapping(str(root / "etc/jvm-pre-466.config"), "/etc/trino/jvm.config") \
                 .with_volume_mapping(str(root / "etc/config-pre-466.properties"), "/etc/trino/config.properties")
 
-        print("Starting Trino container...")
+        print(f"Starting Trino container using image {trino_repository}:{trino_version}...")
         trino.start()
 
         # Wait for logs indicating the service has started
+        
         wait_for_logs(trino, "SERVER STARTED", timeout=60)
 
         # Otherwise some tests fail with No nodes available

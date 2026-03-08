@@ -27,8 +27,9 @@ with open(os.path.join(here, "README.md"), "r", "utf-8") as f:
     readme = f.read()
 
 sqlalchemy_require = ["sqlalchemy >= 1.4"]
+arrow_require = ["pyarrow"]
 
-all_require = sqlalchemy_require
+all_require = sqlalchemy_require + arrow_require
 
 tests_require = all_require + [
     # httpretty >= 1.1 duplicates requests in `httpretty.latest_requests`
@@ -47,7 +48,8 @@ tests_require = all_require + [
     "ruff",
     "isort",
     "testcontainers",
-    "boto3"
+    "boto3",
+    "pyarrow"  # needed for arrow integration tests
 ]
 
 setup(
@@ -93,6 +95,7 @@ setup(
     ],
     extras_require={
         "all": all_require,
+        "arrow": arrow_require,
         "sqlalchemy": sqlalchemy_require,
         "tests": tests_require,
     },

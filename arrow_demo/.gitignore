@@ -1,0 +1,9 @@
+# Downloaded JARs (re-created by scripts/setup.sh)
+lib/*.jar
+
+# Python
+__pycache__/
+*.pyc
+
+# Java
+*.class

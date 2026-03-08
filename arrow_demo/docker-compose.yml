@@ -1,0 +1,89 @@
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # Web console
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  init-s3:
+    image: minio/mc:latest
+    container_name: init-s3
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set myminio http://minio:9000 admin minio123 &&
+        mc mb --ignore-existing myminio/spooling &&
+        mc mb --ignore-existing myminio/warehouse &&
+        echo 'Buckets created: spooling, warehouse'
+      "
+    restart: "no"
+
+  init-catalog-db:
+    build:
+      context: .
+      dockerfile: init-catalog-db.Dockerfile
+    container_name: init-catalog-db
+    volumes:
+      - catalog-db:/var/trino
+    restart: "no"
+
+  trino:
+    build:
+      context: .
+      dockerfile: trino.Dockerfile
+    container_name: trino
+    depends_on:
+      init-s3:
+        condition: service_completed_successfully
+      init-catalog-db:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8085:8080"
+    volumes:
+      - catalog-db:/var/trino
+    healthcheck:
+      test: ["CMD", "trino", "--execute", "SELECT 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  generate-data:
+    build:
+      context: .
+      dockerfile: trino.Dockerfile
+    container_name: generate-data
+    depends_on:
+      trino:
+        condition: service_healthy
+    entrypoint: ["sh", "/tmp/generate-data.sh"]
+    restart: "no"
+
+  client:
+    build:
+      context: .
+      dockerfile: client.Dockerfile
+      args:
+        TRINO_JDBC_VERSION: "479"
+    container_name: client
+    depends_on:
+      generate-data:
+        condition: service_completed_successfully
+    environment:
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
+
+volumes:
+  catalog-db:
