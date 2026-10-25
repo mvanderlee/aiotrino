@@ -41,7 +41,7 @@ jobs:
       - name: Run formatter check
         run: nox --session=format --non-interactive
 
-      - name: Run tests for each supported Python version
+      - name: Run tests on SQLAlchemy 2.0 and 2.1
         run: nox --session=test --non-interactive --python ${{ matrix.python-version }}
 
       - name: Upload test and coverage reports
@@ -50,6 +50,6 @@ jobs:
         with:
           name: reports-py${{ matrix.python-version }}
           path: |
-            junit-${{ matrix.python-version }}.xml
-            coverage-${{ matrix.python-version }}.xml
+            junit-${{ matrix.python-version }}-sqlalchemy*.xml
+            coverage-${{ matrix.python-version }}-sqlalchemy*.xml
           if-no-files-found: warn
