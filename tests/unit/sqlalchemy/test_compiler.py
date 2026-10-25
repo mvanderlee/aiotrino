@@ -16,7 +16,7 @@ from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql import column, table
 from sqlalchemy.sql.sqltypes import VARBINARY as GenericVARBINARY
 
-from aiotrino.sqlalchemy.datatype import VARBINARY
+from aiotrino.sqlalchemy.datatype import MAP, ROW, VARBINARY
 from aiotrino.sqlalchemy.dialect import AIOTrinoDialect
 from tests.unit.conftest import sqlalchemy_version
 
@@ -174,6 +174,17 @@ def test_varbinary_literal_binds_rejects_non_bytes(dialect):
     expression = literal("not-bytes", type_=VARBINARY())
     with pytest.raises(CompileError):
         expression.compile(dialect=dialect, compile_kwargs={"literal_binds": True})
+
+
+@pytest.mark.filterwarnings("error")
+@pytest.mark.parametrize("type_", [MAP(String, Integer), ROW([("a", Integer)])])
+def test_composite_types_support_comparison(dialect, type_):
+    left = column("l", type_)
+    right = column("r", type_)
+
+    assert str(left.is_(None).compile(dialect=dialect)) == "l IS NULL"
+    assert str((left == right).compile(dialect=dialect)) == "l = r"
+    assert str(left.in_([right]).compile(dialect=dialect)) == "l IN (r)"
 
 
 def test_varbinary_create_table(dialect):

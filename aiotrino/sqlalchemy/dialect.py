@@ -27,14 +27,13 @@ from sqlalchemy.engine.base import Connection
 from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.engine.url import URL
 from sqlalchemy.sql import sqltypes
-from sqlalchemy.util.concurrency import await_fallback, await_only
 
 from aiotrino import dbapi as aiotrino_dbapi
 from aiotrino import logging
 from aiotrino.auth import BasicAuthentication, JWTAuthentication
 from aiotrino.client import TrinoRequest
 from aiotrino.dbapi import ColumnDescription, Cursor, IsolationLevel, NotSupportedError
-from aiotrino.sqlalchemy import compiler, datatype, error
+from aiotrino.sqlalchemy import _compat, compiler, datatype, error
 from aiotrino.utils import aiter
 
 from .datatype import VARBINARY, JSONIndexType, JSONPathType
@@ -219,7 +218,7 @@ class AsyncAdapt_aiotrino_ss_cursor(AsyncAdapt_aiotrino_cursor):
 
 
 class AsyncAdapt_aiotrino_connection(AdaptedConnection):
-    await_ = staticmethod(await_only)
+    await_ = staticmethod(_compat.await_)
 
     _connection: aiotrino_dbapi.Connection
 
@@ -388,7 +387,7 @@ class AsyncAdapt_aiotrino_connection(AdaptedConnection):
 class AsyncAdaptFallback_aiotrino_connection(AsyncAdapt_aiotrino_connection):
     __slots__ = ()
 
-    await_ = staticmethod(await_fallback)
+    await_ = staticmethod(_compat.await_fallback)
 
 
 class AsyncAdapt_aiotrino_dbapi:
@@ -400,7 +399,7 @@ class AsyncAdapt_aiotrino_dbapi:
         async_fallback = kw.pop("async_fallback", False)
         creator_fn = kw.pop("async_creator_fn", self.aiotrino.connect)
 
-        if util.asbool(async_fallback):
+        if _compat.async_fallback_enabled(async_fallback):
             return AsyncAdaptFallback_aiotrino_connection(
                 self,
                 creator_fn(*arg, **kw),
@@ -458,7 +457,7 @@ class AsyncAdapt_aiotrino_dbapi:
 
 
 class AIOTrinoDialect(DefaultDialect):
-    await_ = staticmethod(await_only)
+    await_ = staticmethod(_compat.await_)
 
     def __init__(self, json_serializer=None, json_deserializer=None, **kwargs):
         DefaultDialect.__init__(self, **kwargs)
@@ -521,7 +520,7 @@ class AIOTrinoDialect(DefaultDialect):
     def get_pool_class(cls, url):
         async_fallback = url.query.get("async_fallback", False)
 
-        if util.asbool(async_fallback):
+        if _compat.async_fallback_enabled(async_fallback):
             return pool.FallbackAsyncAdaptedQueuePool
         return pool.AsyncAdaptedQueuePool
 
@@ -532,14 +531,15 @@ class AIOTrinoDialect(DefaultDialect):
         if url.port:
             kwargs["port"] = url.port
 
-        # url.database (catalog and schema) is the one component SQLAlchemy leaves url-encoded, so it
-        # still needs decoding here.
+        # SQLAlchemy 2.0 leaves url.database (catalog and schema) url-encoded; 2.1 decodes it like the
+        # other components, and decoding it again would turn a literal '+' into a space.
         db_parts = (url.database or "system").split("/")
+        if not _compat.URL_DATABASE_IS_DECODED:
+            db_parts = [unquote_plus(part) for part in db_parts]
         if len(db_parts) == 1:
-            kwargs["catalog"] = unquote_plus(db_parts[0])
+            kwargs["catalog"] = db_parts[0]
         elif len(db_parts) == 2:
-            kwargs["catalog"] = unquote_plus(db_parts[0])
-            kwargs["schema"] = unquote_plus(db_parts[1])
+            kwargs["catalog"], kwargs["schema"] = db_parts
         else:
             raise ValueError(f"Unexpected database format {url.database}")
 
@@ -649,7 +649,7 @@ class AIOTrinoDialect(DefaultDialect):
         ).strip()
         res = connection.execute(sql.text(query))
         try:
-            description = await_only(res.cursor.get_description())
+            description = _compat.await_(res.cursor.get_description())
             partition_names = [desc[0] for desc in description]
             data_types = [desc[1] for desc in description]
         finally:

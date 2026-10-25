@@ -2,13 +2,15 @@ from typing import Any
 from unittest import mock
 
 import pytest
-from sqlalchemy import exc
+from sqlalchemy import exc, pool
 from sqlalchemy.engine.url import URL, make_url
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from aiotrino.auth import BasicAuthentication, JWTAuthentication
 from aiotrino.dbapi import Connection
 from aiotrino.sqlalchemy import URL as trino_url
-from aiotrino.sqlalchemy.dialect import AIOTrinoDialect
+from aiotrino.sqlalchemy import _compat
+from aiotrino.sqlalchemy.dialect import AIOTrinoDialect, AsyncAdaptFallback_aiotrino_connection
 from aiotrino.transaction import IsolationLevel
 
 
@@ -378,7 +380,7 @@ def test_get_columns_includes_comment():
 
 def test_trino_connection_query_params_preserve_plus():
     # SQLAlchemy already decodes query values, so a '+' round-tripped through the URL builder must
-    # survive. Catalog and schema come from url.database, which SQLAlchemy leaves url-encoded.
+    # survive. Catalog and schema come from url.database, which only SQLAlchemy 2.1 decodes.
     dialect = AIOTrinoDialect()
     url = make_url(
         trino_url(
@@ -407,6 +409,56 @@ def test_trino_connection_query_params_preserve_plus():
     assert cparams["extra_credential"] == [("cred", "va+lue")]
     assert cparams["client_tags"] == ["ta+g"]
     assert cparams["roles"] == {"system": "ro+le"}
+
+
+@pytest.mark.parametrize(
+    "url, catalog, schema",
+    [
+        (trino_url(host="localhost", catalog="ca t", schema="sc+h"), "ca t", "sc+h"),
+        (trino_url(host="localhost", catalog="ca%2Bt", schema="sc%h"), "ca%2Bt", "sc%h"),
+        ("aiotrino://localhost/ca%2Bt/sc%20h", "ca+t", "sc h"),
+    ],
+)
+def test_create_connect_args_decodes_catalog_and_schema_once(url: str, catalog: str, schema: str):
+    _, cparams = AIOTrinoDialect().create_connect_args(make_url(url))
+
+    assert cparams["catalog"] == catalog
+    assert cparams["schema"] == schema
+
+
+def test_async_fallback_disabled_uses_async_pool():
+    url = make_url("aiotrino://localhost/?async_fallback=false")
+
+    assert AIOTrinoDialect.get_pool_class(url) is pool.AsyncAdaptedQueuePool
+
+
+@pytest.mark.skipif(not _compat.ASYNC_FALLBACK_SUPPORTED, reason="SQLAlchemy 2.1 removed async_fallback")
+class TestAsyncFallbackSupported:
+    def test_url_query_selects_fallback_pool(self):
+        url = make_url("aiotrino://localhost/?async_fallback=true")
+
+        assert AIOTrinoDialect.get_pool_class(url) is pool.FallbackAsyncAdaptedQueuePool
+
+    async def test_connect_args_select_fallback_connection(self):
+        connection = AIOTrinoDialect.import_dbapi().connect(host="localhost", async_fallback=True)
+
+        assert isinstance(connection, AsyncAdaptFallback_aiotrino_connection)
+
+
+@pytest.mark.skipif(_compat.ASYNC_FALLBACK_SUPPORTED, reason="SQLAlchemy 2.0 still supports async_fallback")
+class TestAsyncFallbackRemoved:
+    def test_url_query_raises(self):
+        with pytest.raises(exc.ArgumentError, match=r"async_fallback is not supported on SQLAlchemy 2\.1"):
+            create_async_engine("aiotrino://user@localhost:8080/system?async_fallback=true")
+
+    async def test_connect_args_raise(self):
+        engine = create_async_engine("aiotrino://user@localhost:8080/system", connect_args={"async_fallback": True})
+        try:
+            with pytest.raises(exc.ArgumentError, match=r"async_fallback is not supported on SQLAlchemy 2\.1"):
+                async with engine.connect():
+                    pass
+        finally:
+            await engine.dispose()
 
 
 def test_trino_connection_jwt_auth_preserves_plus():

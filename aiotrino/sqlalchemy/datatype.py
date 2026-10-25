@@ -21,6 +21,8 @@ from sqlalchemy.sql import sqltypes
 from sqlalchemy.sql.type_api import TypeDecorator, TypeEngine
 from sqlalchemy.types import JSON
 
+from aiotrino.sqlalchemy import _compat
+
 
 SQLType = TypeEngine | type[TypeEngine]
 
@@ -31,6 +33,7 @@ class DOUBLE(sqltypes.Float):
 
 class MAP(TypeEngine):
     __visit_name__ = "MAP"
+    operator_classes = _compat.COMPARABLE_OPERATOR_CLASSES
 
     def __init__(self, key_type: SQLType, value_type: SQLType):
         if isinstance(key_type, type):
@@ -48,6 +51,7 @@ class MAP(TypeEngine):
 
 class ROW(TypeEngine):
     __visit_name__ = "ROW"
+    operator_classes = _compat.COMPARABLE_OPERATOR_CLASSES
 
     def __init__(self, attr_types: list[tuple[str | None, SQLType]]):
         self.attr_types: list[tuple[str | None, SQLType]] = []

@@ -42,8 +42,8 @@ Repository = "https://github.com/gledi-ai/aiotrino"
 Documentation = "https://github.com/gledi-ai/aiotrino"
 
 [project.optional-dependencies]
-sqlalchemy = ["sqlalchemy>=2.0"]
-all = ["sqlalchemy>=2.0"]
+sqlalchemy = ["sqlalchemy[asyncio]>=2.0,<2.2"]
+all = ["sqlalchemy[asyncio]>=2.0,<2.2"]
 
 [project.entry-points."sqlalchemy.dialects"]
 aiotrino = "aiotrino.sqlalchemy.dialect:AIOTrinoDialect"

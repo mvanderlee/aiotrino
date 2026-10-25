@@ -1,6 +1,6 @@
 import json
 import re
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote, quote_plus, urlparse
 
 from sqlalchemy import exc
 
@@ -81,12 +81,12 @@ def _url(
     trino_url += f":{port}/"
 
     if catalog is not None:
-        trino_url += f"{quote_plus(catalog)}"
+        trino_url += quote(catalog, safe="")
 
     if schema is not None:
         if catalog is None:
             raise exc.ArgumentError("catalog must be specified when specifying a default schema.")
-        trino_url += f"/{quote_plus(schema)}"
+        trino_url += f"/{quote(schema, safe='')}"
 
     assert source
     trino_url += f"?source={quote_plus(source)}"
