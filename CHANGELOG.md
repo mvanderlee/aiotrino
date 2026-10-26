@@ -3,6 +3,18 @@
 All notable changes to aiotrino-patched since it was forked from
 [mvanderlee/aiotrino](https://github.com/mvanderlee/aiotrino).
 
+## [0.6.0] - 2026-10-26
+
+### Features
+
+- **sqlalchemy:** Support SQLAlchemy 2.1 alongside 2.0
+
+### Miscellaneous
+
+- **make:** Fail on unknown targets
+- Drop agent tooling entries from .gitignore
+- Test against SQLAlchemy 2.0 and 2.1
+
 ## [0.5.1] - 2026-10-01
 
 ### Miscellaneous
